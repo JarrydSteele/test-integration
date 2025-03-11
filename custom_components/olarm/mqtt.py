@@ -5,6 +5,8 @@ import logging
 from typing import Dict, List, Optional, Callable, Any, Awaitable
 from .debug import mqtt_log
 
+_LOGGER = logging.getLogger(__name__)
+
 try:
     import paho.mqtt.client as mqtt_client
     _LOGGER.warning("✅ paho-mqtt is installed correctly")
@@ -26,8 +28,6 @@ from .const import (
     SIGNAL_OLARM_MQTT_UPDATE,
     CONF_DEBUG_MQTT,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 class OlarmMqttClient:
     """MQTT client for Olarm devices."""
