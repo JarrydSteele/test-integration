@@ -12,19 +12,28 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .auth import OlarmAuth, OlarmAuthError
+# Make sure all imports are correct and available
+try:
+    from .api import OlarmApiClient, OlarmApiError
+except ImportError:
+    # Handle fallback for import errors
+    from api import OlarmApiClient, OlarmApiError
+
 from .const import DOMAIN, CONF_USER_EMAIL_PHONE, CONF_USER_PASS, CONF_API_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
 async def validate_auth(hass: HomeAssistant, user_email_phone: str, user_pass: str) -> bool:
     """Validate the user credentials."""
+    from .auth import OlarmAuth
+    
     session = async_get_clientsession(hass)
     auth = OlarmAuth(hass, user_email_phone, user_pass, session)
     
     try:
         return await auth.initialize()
-    except Exception:
+    except Exception as e:
+        _LOGGER.error(f"Auth validation error: {e}")
         return False
 
 class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -38,7 +47,7 @@ class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            # Support both authentication methods (API key for backward compatibility)
+            # Support both authentication methods
             if CONF_API_KEY in user_input and user_input[CONF_API_KEY]:
                 api_key = user_input[CONF_API_KEY]
                 # Create the config entry
