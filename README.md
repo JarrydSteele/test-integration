@@ -52,6 +52,10 @@ This method does not support MQTT real-time updates and only uses API polling.
 3. Generate or copy your API key
 4. Enter this API key in the Home Assistant integration setup
 
+### Option 3: Magic
+
+Configure the integration [here](https://my.home-assistant.io/redirect/config_flow_start/?domain=olarm).
+
 ## How It Works
 
 ### MQTT Mode (Email/Password Auth)
