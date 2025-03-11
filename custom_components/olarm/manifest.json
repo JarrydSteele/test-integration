@@ -1,0 +1,12 @@
+{
+  "domain": "olarm",
+  "name": "Olarm",
+  "version": "1.0.0",
+  "documentation": "https://github.com/jarrydsteele/test-integration",
+  "issue_tracker": "https://github.com/jarrydsteele/test-integration/issues",
+  "dependencies": [],
+  "codeowners": ["@jarrydsteele"],
+  "requirements": ["paho-mqtt==1.6.1"],
+  "iot_class": "cloud_push",
+  "config_flow": true
+}
