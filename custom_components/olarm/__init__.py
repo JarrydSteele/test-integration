@@ -1,9 +1,11 @@
 """The Olarm integration."""
 import asyncio
 import logging
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta
 
 import aiohttp
+import async_timeout
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
@@ -15,7 +17,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .api import OlarmApiClient, OlarmApiError
 from .auth import OlarmAuth
-from .mqtt import OlarmMqttClient, mqtt_log
+from .mqtt import OlarmMqttClient
 from .handler import OlarmMessageHandler
 from .const import (
     CONF_API_KEY,
@@ -30,7 +32,14 @@ from .const import (
     SERVICE_CHECK_MQTT_STATUS,
 )
 
+# Set up loggers
 _LOGGER = logging.getLogger(__name__)
+_MQTT_LOGGER = logging.getLogger(f"{__name__}.mqtt")
+_MQTT_LOGGER.setLevel(logging.WARNING)
+
+def log_mqtt(message: str):
+    """Log MQTT-related messages at WARNING level to ensure visibility."""
+    _MQTT_LOGGER.warning("MQTT: %s", message)
 
 async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Olarm component."""
@@ -39,33 +48,22 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up Olarm from a config entry."""
-    # Add direct debug logging
-    with open("/config/olarm_setup.log", "a") as f:
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{timestamp} - Starting integration setup\n")
-        
-        # Log config entry data (without passwords)
-        entry_data_safe = {k: v for k, v in entry.data.items() if k != "user_pass"}
-        f.write(f"{timestamp} - Entry data: {entry_data_safe}\n")
+    # Log entry data (without passwords)
+    entry_data_safe = {k: v for k, v in entry.data.items() if k != CONF_USER_PASS}
+    _LOGGER.debug("Setting up Olarm integration with data: %s", entry_data_safe)
     
     session = async_get_clientsession(hass)
     
     # Set up data structures
     hass.data.setdefault(DOMAIN, {})
     entry_data = hass.data[DOMAIN].setdefault(entry.entry_id, {})
-    mqtt_only = entry.data.get(CONF_MQTT_ONLY, True)
-    debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, True)
-    
-    with open("/config/olarm_setup.log", "a") as f:
-        f.write(f"{timestamp} - MQTT Only: {mqtt_only}, Debug MQTT: {debug_mqtt}\n")
+    mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
+    debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, False)
     
     # Initialize either with API key or email/password auth
     if CONF_API_KEY in entry.data:
         # Legacy API key method
-        with open("/config/olarm_setup.log", "a") as f:
-            f.write(f"{timestamp} - Setting up with API key authentication\n")
-            
+        _LOGGER.debug("Setting up with API key authentication")
         client = OlarmApiClient(entry.data[CONF_API_KEY], session)
         entry_data["client"] = client
         
@@ -75,8 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         try:
             await coordinator.async_config_entry_first_refresh()
         except Exception as ex:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Error in coordinator refresh: {str(ex)}\n")
+            _LOGGER.error("Error in coordinator refresh: %s", ex)
             raise
             
         entry_data["coordinator"] = coordinator
@@ -86,12 +83,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
     elif CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
         # New email/password auth with MQTT support
-        with open("/config/olarm_setup.log", "a") as f:
-            f.write(f"{timestamp} - Setting up with email/password authentication\n")
+        _LOGGER.warning("Setting up with email/password authentication")
+        log_mqtt("Setting up Olarm integration with email/password auth")
         
         if mqtt_only:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - MQTT-ONLY MODE ENABLED\n")
+            _LOGGER.warning("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
+            log_mqtt("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
         
         # Initialize auth
         auth = OlarmAuth(
@@ -104,16 +101,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         try:
             auth_success = await auth.initialize()
             if not auth_success:
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - Auth initialization failed\n")
+                _LOGGER.error("Authentication initialization failed")
                 raise Exception("Authentication initialization failed")
                 
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Auth initialized successfully\n")
+            _LOGGER.info("Auth initialized successfully")
                 
         except Exception as ex:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Auth error: {str(ex)}\n")
+            _LOGGER.error("Auth error: %s", ex)
             raise
         
         entry_data["auth"] = auth
@@ -121,17 +115,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         # Get devices from auth
         devices = auth.get_devices()
         if not devices:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - No devices found for user\n")
+            _LOGGER.warning("No devices found for user")
+            log_mqtt("No devices found for user - MQTT setup will be skipped")
         else:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Found {len(devices)} devices\n")
+            _LOGGER.info("Found %d devices", len(devices))
             
         # Create API client from access token
         tokens = auth.get_tokens()
         if tokens["access_token"]:
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Creating API client with token\n")
+            _LOGGER.debug("Creating API client with token")
                 
             client = OlarmApiClient(tokens["access_token"], session)
             entry_data["client"] = client
@@ -140,11 +132,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             coordinator = OlarmDataUpdateCoordinator(hass, client, auth)
             try:
                 await coordinator.async_config_entry_first_refresh()
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - Coordinator refresh succeeded\n")
+                _LOGGER.debug("Coordinator refresh succeeded")
             except Exception as ex:
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - Coordinator refresh error: {str(ex)}\n")
+                _LOGGER.error("Coordinator refresh error: %s", ex)
                 raise
                 
             entry_data["coordinator"] = coordinator
@@ -155,16 +145,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
         # Set up MQTT clients for each device
         mqtt_clients = {}
-        with open("/config/olarm_setup.log", "a") as f:
-            f.write(f"{timestamp} - Setting up MQTT for {len(devices)} devices\n")
+        _LOGGER.warning("🔄 Setting up MQTT for %d devices", len(devices))
+        log_mqtt(f"Setting up MQTT for {len(devices)} devices")
         
         for device in devices:
             device_id = device["id"]
             imei = device["imei"]
             device_name = device.get("name", "Unknown Device")
             
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - Setting up MQTT for device: {device_name} (IMEI: {imei})\n")
+            _LOGGER.warning("🔄 Setting up MQTT for device: %s (IMEI: %s)", device_name, imei)
+            log_mqtt(f"Setting up MQTT for device: {device_name} (IMEI: {imei})")
             
             # Create MQTT client
             mqtt_client = OlarmMqttClient(
@@ -173,7 +163,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 tokens["access_token"],
                 device_id,
                 device_name,
-                debug_mqtt
+                debug_mqtt,
+                _MQTT_LOGGER
             )
             
             # Register message callback
@@ -183,22 +174,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             try:
                 connected = await mqtt_client.connect()
                 if connected:
-                    with open("/config/olarm_setup.log", "a") as f:
-                        f.write(f"{timestamp} - MQTT connected for device: {device_name}\n")
+                    _LOGGER.warning("✅ MQTT connected for device: %s", device_name)
+                    log_mqtt(f"✅ MQTT connected for device: {device_name}")
                     mqtt_clients[device_id] = mqtt_client
                 else:
-                    with open("/config/olarm_setup.log", "a") as f:
-                        f.write(f"{timestamp} - MQTT connection failed for device: {device_name}\n")
+                    _LOGGER.error("❌ MQTT connection failed for device: %s", device_name)
+                    log_mqtt(f"❌ MQTT connection failed for device: {device_name}")
                     
                     if mqtt_only:
-                        with open("/config/olarm_setup.log", "a") as f:
-                            f.write(f"{timestamp} - MQTT-ONLY MODE: Device {device_name} will be unavailable\n")
+                        _LOGGER.error("⚠️ MQTT-ONLY MODE: Device %s will be unavailable", device_name)
+                        log_mqtt(f"⚠️ MQTT-ONLY MODE: Device {device_name} will be unavailable")
                     else:
-                        with open("/config/olarm_setup.log", "a") as f:
-                            f.write(f"{timestamp} - Falling back to API polling for device: {device_name}\n")
+                        _LOGGER.warning("⚠️ Falling back to API polling for device: %s", device_name)
+                        log_mqtt(f"⚠️ Falling back to API polling for device: {device_name}")
             except Exception as mqtt_ex:
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - MQTT connection error for {device_name}: {str(mqtt_ex)}\n")
+                _LOGGER.error("MQTT connection error for %s: %s", device_name, mqtt_ex)
+                log_mqtt(f"MQTT connection error for {device_name}: {mqtt_ex}")
                 # Continue to next device, don't raise the exception
         
         entry_data["mqtt_clients"] = mqtt_clients
@@ -209,33 +200,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             total_count = len(devices)
             success_percent = int(mqtt_count/total_count*100) if total_count > 0 else 0
             
-            with open("/config/olarm_setup.log", "a") as f:
-                f.write(f"{timestamp} - MQTT setup complete: {mqtt_count}/{total_count} devices connected ({success_percent}%)\n")
-                
+            _LOGGER.warning(
+                "✅ MQTT setup complete: %d/%d devices connected (%s%%)",
+                mqtt_count, total_count, success_percent
+            )
+            log_mqtt(f"✅ MQTT setup complete: {mqtt_count}/{total_count} devices connected ({success_percent}%)")
             entry_data["mqtt_enabled"] = True
             
             # Set up a periodic task to check MQTT status
             async def check_mqtt_periodically(now=None):
                 """Check MQTT status periodically and log results."""
-                with open("/config/olarm_status.log", "a") as f:
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"{ts} - Performing periodic MQTT check\n")
+                _LOGGER.warning("🔄 Performing periodic MQTT check")
+                log_mqtt("🔄 Performing periodic MQTT check")
                 
                 for device_id, client in mqtt_clients.items():
                     status = client.get_status()
-                    connection_state = "CONNECTED" if status["is_connected"] else "DISCONNECTED"
+                    connection_state = "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
                     
-                    with open("/config/olarm_status.log", "a") as f:
-                        f.write(f"{ts} - {status['device_name']}: {connection_state}, Messages: {status['messages_received']}\n")
+                    _LOGGER.warning(
+                        "MQTT Status for %s: %s, Messages: %d",
+                        status["device_name"], connection_state, status["messages_received"]
+                    )
+                    log_mqtt(f"Status for {status['device_name']}: {connection_state}, Messages: {status['messages_received']}")
                     
                     # If connected, request a status update
                     if status["is_connected"]:
-                        with open("/config/olarm_status.log", "a") as f:
-                            f.write(f"{ts} - Requesting update for {status['device_name']}\n")
+                        _LOGGER.warning("Requesting MQTT update for %s", status["device_name"])
+                        log_mqtt(f"Requesting update for {status['device_name']}")
                         client.publish_status_request()
                     else:
-                        with open("/config/olarm_status.log", "a") as f:
-                            f.write(f"{ts} - Attempting to reconnect {status['device_name']}\n")
+                        _LOGGER.warning("Attempting to reconnect %s", status["device_name"])
+                        log_mqtt(f"Attempting to reconnect {status['device_name']}")
                         hass.async_create_task(client.connect())
             
             # Register a periodic check every 5 minutes
@@ -249,43 +244,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             hass.async_create_task(check_mqtt_periodically())
         else:
             if mqtt_only:
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - MQTT-ONLY MODE: No MQTT connections were established, integration may not function!\n")
+                _LOGGER.error("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
+                log_mqtt("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
             else:
-                with open("/config/olarm_setup.log", "a") as f:
-                    f.write(f"{timestamp} - No MQTT connections established, using API polling only\n")
+                _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
+                log_mqtt("⚠️ No MQTT connections established, using API polling only")
             entry_data["mqtt_enabled"] = False
     
     else:
         # This shouldn't happen
-        with open("/config/olarm_setup.log", "a") as f:
-            f.write(f"{timestamp} - Neither API key nor email/password provided\n")
+        _LOGGER.error("Neither API key nor email/password provided")
         return False
     
     # Register the MQTT status service
     async def async_check_mqtt_status(call):
         """Service to check MQTT status."""
-        with open("/config/olarm_status.log", "a") as f:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"{ts} - Manual MQTT status check triggered\n")
+        log_mqtt("Manual MQTT status check triggered")
         
         if "mqtt_clients" not in entry_data:
-            with open("/config/olarm_status.log", "a") as f:
-                f.write(f"{ts} - No MQTT clients available\n")
+            _LOGGER.warning("No MQTT clients available - email/password authentication required for MQTT support")
+            log_mqtt("No MQTT clients available - email/password authentication required")
             return
             
         mqtt_clients = entry_data["mqtt_clients"]
         if not mqtt_clients:
-            with open("/config/olarm_status.log", "a") as f:
-                f.write(f"{ts} - No active MQTT clients found\n")
+            _LOGGER.warning("No active MQTT clients found")
+            log_mqtt("No active MQTT clients found")
             return
             
         for device_id, client in mqtt_clients.items():
             status = client.get_status()
-            connection_state = "CONNECTED" if status["is_connected"] else "DISCONNECTED"
+            connection_state = "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
             
-            with open("/config/olarm_status.log", "a") as f:
-                f.write(f"{ts} - Status for {status['device_name']} ({device_id}): {connection_state}\n")
+            _LOGGER.warning(
+                "MQTT Status for %s (%s): %s", 
+                status["device_name"], device_id, connection_state
+            )
+            log_mqtt(f"Status for {status['device_name']} ({device_id}): {connection_state}")
             
             if status["is_connected"]:
                 uptime = "Unknown"
@@ -300,36 +295,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     hours, minutes = divmod(minutes, 60)
                     last_msg = f"{hours}h {minutes}m {seconds}s ago"
                 
-                with open("/config/olarm_status.log", "a") as f:
-                    f.write(f"{ts} - Connected for: {uptime}, {status['messages_received']} messages received, last message: {last_msg}\n")
+                _LOGGER.warning(
+                    "  - Connected for: %s, %d messages received, last message: %s",
+                    uptime, status["messages_received"], last_msg
+                )
+                log_mqtt(f"  - Connected for: {uptime}, {status['messages_received']} messages received, last message: {last_msg}")
             
             # Request a status update from each client to verify it still works
             if status["is_connected"]:
-                with open("/config/olarm_status.log", "a") as f:
-                    f.write(f"{ts} - Testing connection by requesting status update\n")
+                _LOGGER.warning("  - Testing connection by requesting status update...")
+                log_mqtt(f"  - Testing connection by requesting status update...")
                 client.publish_status_request()
             else:
-                with open("/config/olarm_status.log", "a") as f:
-                    f.write(f"{ts} - Attempting to reconnect\n")
+                _LOGGER.warning("  - Attempting to reconnect...")
+                log_mqtt(f"  - Attempting to reconnect...")
                 hass.async_create_task(client.connect())
     
     # Register the service
     hass.services.async_register(
         DOMAIN, SERVICE_CHECK_MQTT_STATUS, async_check_mqtt_status
     )
+    log_mqtt(f"Registered service: {DOMAIN}.{SERVICE_CHECK_MQTT_STATUS}")
     
     # Load platform entities
     for platform in PLATFORMS:
         await hass.config_entries.async_forward_entry_setup(entry, platform)
     
-    with open("/config/olarm_setup.log", "a") as f:
-        f.write(f"{timestamp} - Integration setup complete\n")
-        
+    log_mqtt("Olarm integration setup complete")
+    _LOGGER.info("Olarm integration setup complete")
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""
-    mqtt_log("Unloading Olarm integration")
+    log_mqtt("Unloading Olarm integration")
     
     # Unload platforms
     unload_ok = all(
@@ -351,14 +349,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
             
         # Disconnect MQTT clients
         if "mqtt_clients" in entry_data:
-            mqtt_log(f"Disconnecting {len(entry_data['mqtt_clients'])} MQTT clients")
+            log_mqtt(f"Disconnecting {len(entry_data['mqtt_clients'])} MQTT clients")
             for client in entry_data["mqtt_clients"].values():
                 client.disconnect()
         
         # Clean up data
         hass.data[DOMAIN].pop(entry.entry_id)
     
-    mqtt_log("Olarm integration unloaded")
+    log_mqtt("Olarm integration unloaded")
     return unload_ok
 
 class OlarmDataUpdateCoordinator(DataUpdateCoordinator):
@@ -388,7 +386,7 @@ class OlarmDataUpdateCoordinator(DataUpdateCoordinator):
                     self.client.api_key = tokens["access_token"]
                     self.client.headers = {"Authorization": f"Bearer {tokens['access_token']}"}
             
-            mqtt_log("Performing API data update...")
+            log_mqtt("Performing API data update...")
             # Get all devices
             result = await self.client.get_devices()
             devices = {}
@@ -400,8 +398,8 @@ class OlarmDataUpdateCoordinator(DataUpdateCoordinator):
                 devices[device_id] = device
             
             self.devices = devices
-            mqtt_log(f"API data update complete, found {len(devices)} devices")
+            log_mqtt(f"API data update complete, found {len(devices)} devices")
             return devices
         except OlarmApiError as err:
-            mqtt_log(f"❌ API Error: {err}")
+            log_mqtt(f"❌ API Error: {err}")
             raise UpdateFailed(f"Error communicating with API: {err}")

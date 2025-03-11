@@ -2,26 +2,10 @@
 import asyncio
 import json
 import logging
-import sys
-print("\n\n========== OLARM MQTT MODULE LOADED ==========\n\n", flush=True)
+import time
 from typing import Dict, List, Optional, Callable, Any, Awaitable
 
-# Extremely direct diagnostic logger that will bypass all filtering
-def direct_log(message):
-    with open("/config/olarm_mqtt.log", "a") as f:
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"{timestamp} - {message}\n")
-    print(f"\n⚠️ OLARM MQTT: {message}\n", flush=True)
-
-# Add diagnostic info
-direct_log("MQTT module initialized")
-try:
-    import paho.mqtt.client
-    direct_log("✅ PAHO-MQTT IMPORTED SUCCESSFULLY")
-except ImportError as e:
-    direct_log(f"❌ PAHO-MQTT IMPORT ERROR: {e}")
-
+# Set up loggers
 _LOGGER = logging.getLogger(__name__)
 
 # Check paho-mqtt installation
@@ -50,12 +34,6 @@ from .const import (
     CONF_DEBUG_MQTT,
 )
 
-# Direct console logger for MQTT diagnostics
-def mqtt_log(message: str):
-    """Log MQTT messages directly to console for diagnostics."""
-    print(f"\n===== OLARM MQTT: {message} =====\n", flush=True)
-    _LOGGER.warning(f"🔵 DIRECT MQTT LOG: {message}")
-
 class OlarmMqttClient:
     """MQTT client for Olarm devices."""
 
@@ -66,7 +44,8 @@ class OlarmMqttClient:
         access_token: str, 
         device_id: str,
         device_name: str = "Unknown",
-        debug_mqtt: bool = False
+        debug_mqtt: bool = False,
+        mqtt_logger = None
     ):
         """Initialize the MQTT client."""
         self.hass = hass
@@ -82,27 +61,25 @@ class OlarmMqttClient:
         self.connection_time = None
         self.messages_received = 0
         self.last_message_time = None
+        self.mqtt_logger = mqtt_logger or _LOGGER
         
         # Log initialization
-        mqtt_log(f"Initializing MQTT client for {device_name} (IMEI: {device_imei})")
+        self.mqtt_logger.warning("Initializing MQTT client for %s (IMEI: %s)", device_name, device_imei)
 
     def register_message_callback(self, callback: Callable[[str, str, str], Awaitable[None]]):
         """Register a callback for MQTT messages."""
         self._message_callbacks.append(callback)
-        mqtt_log(f"Registered message callback for {self.device_name}")
+        self.mqtt_logger.warning("Registered message callback for %s", self.device_name)
 
     async def connect(self) -> bool:
         """Connect to MQTT broker."""
-
-        direct_log(f"Attempting to connect to MQTT for device {self.device_name} (IMEI: {self.device_imei})")
-
         # Skip if paho-mqtt is not installed
         if mqtt_client is None:
-            mqtt_log(f"❌ Cannot connect - paho-mqtt is not installed")
+            self.mqtt_logger.error("Cannot connect - paho-mqtt is not installed")
             return False
             
         try:
-            mqtt_log(f"🔄 Connecting to broker for {self.device_name}...")
+            self.mqtt_logger.warning("Connecting to broker for %s...", self.device_name)
             
             # Create MQTT client
             client_id = f"home-assistant-oauth-{self.device_imei}"
@@ -110,8 +87,6 @@ class OlarmMqttClient:
             self.mqtt_client.ws_set_options(path="/mqtt")  # WebSocket path
             self.mqtt_client.username_pw_set(MQTT_USERNAME, self.access_token)
             
-            direct_log(f"MQTT client created with ID: {client_id}, username: {MQTT_USERNAME}")
-
             # Set callbacks
             self.mqtt_client.on_connect = self.on_connect
             self.mqtt_client.on_disconnect = self.on_disconnect
@@ -120,10 +95,9 @@ class OlarmMqttClient:
             # Setup TLS for secure connection
             self.mqtt_client.tls_set()
             
-            direct_log(f"Connecting to {MQTT_HOST}:{MQTT_PORT} via WebSockets")
-
             # Connect
-            mqtt_log(f"🔄 Connecting to {MQTT_HOST}:{MQTT_PORT} with client ID {client_id}")
+            self.mqtt_logger.warning("Connecting to %s:%s with client ID %s", 
+                                    MQTT_HOST, MQTT_PORT, client_id)
             self.mqtt_client.connect(MQTT_HOST, MQTT_PORT)
             
             # Start the MQTT client loop in a separate thread
@@ -133,49 +107,54 @@ class OlarmMqttClient:
             connection_timeout = 15  # seconds
             for i in range(connection_timeout * 2):  # Check every 0.5 seconds
                 if self.is_connected:
-                    mqtt_log(f"✅ Connection established for {self.device_name}!")
+                    self.mqtt_logger.warning("✅ Connection established for %s!", self.device_name)
                     return True
                 await asyncio.sleep(0.5)
                 if i % 4 == 0 and i > 0:  # Every 2 seconds
-                    mqtt_log(f"⏳ Still trying to connect for {self.device_name}... ({i/2}s)")
+                    self.mqtt_logger.warning("⏳ Still trying to connect for %s... (%ds)", 
+                                          self.device_name, i/2)
             
-            mqtt_log(f"❌ Connection timed out for {self.device_name}")
+            self.mqtt_logger.error("❌ Connection timed out for %s after %s seconds", 
+                               self.device_name, connection_timeout)
             return False
         
         except Exception as ex:
-            mqtt_log(f"❌ Error connecting to broker for {self.device_name}: {ex}")
+            self.mqtt_logger.error("❌ Error connecting to broker for %s: %s", 
+                               self.device_name, ex)
             return False
 
     def on_connect(self, client, userdata, flags, rc):
         """Handle connection established callback."""
-
-        direct_log(f"on_connect called with result code {rc} for {self.device_name}")
-        
         if rc == 0:
-            import time
-            self.connection_time = time.time()
-            mqtt_log(f"✅ [CONNECTED] {self.device_name} (IMEI: {self.device_imei})")
+            now = time.time()
+            self.connection_time = now
+            self.mqtt_logger.warning(
+                "✅ [CONNECTED] %s (IMEI: %s)",
+                self.device_name, self.device_imei
+            )
             self.is_connected = True
             
             # Subscribe to device topic
             topic = f"so/app/v1/{self.device_imei}"
             self.mqtt_client.subscribe(topic)
             self.subscribed_topics.add(topic)
-            mqtt_log(f"📥 [SUBSCRIBED] {self.device_name}: {topic}")
+            self.mqtt_logger.warning("[SUBSCRIBED] %s: %s", self.device_name, topic)
             
             # Request device status
-            mqtt_log(f"📤 [REQUESTING] {self.device_name}: Sending status request")
+            self.mqtt_logger.warning("[REQUESTING] %s: Sending status request", self.device_name)
             self.publish_status_request()
         else:
-            mqtt_log(f"❌ [FAILED] {self.device_name}: Failed to connect, code: {rc}")
+            self.mqtt_logger.error("[FAILED] %s: Failed to connect, code: %s", 
+                              self.device_name, rc)
             self.is_connected = False
 
     def on_disconnect(self, client, userdata, rc):
         """Handle disconnection callback."""
         if rc == 0:
-            mqtt_log(f"[DISCONNECTED] {self.device_name}: Clean disconnect")
+            self.mqtt_logger.warning("[DISCONNECTED] %s: Clean disconnect", self.device_name)
         else:
-            mqtt_log(f"⚠️ [DISCONNECTED] {self.device_name}: Unexpected disconnect, code: {rc}")
+            self.mqtt_logger.error("⚠️ [DISCONNECTED] %s: Unexpected disconnect, code: %s", 
+                               self.device_name, rc)
         self.is_connected = False
         self.subscribed_topics.clear()
 
@@ -184,15 +163,16 @@ class OlarmMqttClient:
         topic = msg.topic
         payload = msg.payload.decode("utf-8")
         
-        import time
+        now = time.time()
         self.messages_received += 1
-        self.last_message_time = time.time()
+        self.last_message_time = now
         
-        mqtt_log(f"📩 [MESSAGE] {self.device_name}: #{self.messages_received} on {topic}")
+        self.mqtt_logger.warning("[MESSAGE] %s: #%d on %s", 
+                             self.device_name, self.messages_received, topic)
         
         if self.debug_mqtt:
             shortened_payload = payload[:100] + ("..." if len(payload) > 100 else "")
-            mqtt_log(f"🔍 [PAYLOAD] {shortened_payload}")
+            self.mqtt_logger.warning("[PAYLOAD] %s", shortened_payload)
         
         # Process message in the event loop
         asyncio.run_coroutine_threadsafe(
@@ -207,7 +187,7 @@ class OlarmMqttClient:
             try:
                 await callback(self.device_id, topic, payload)
             except Exception as ex:
-                mqtt_log(f"❌ Error in message callback for {self.device_name}: {ex}")
+                self.mqtt_logger.error("❌ Error in message callback for %s: %s", self.device_name, ex)
         
         # Dispatch update signal
         async_dispatcher_send(
@@ -219,27 +199,28 @@ class OlarmMqttClient:
     def publish_status_request(self):
         """Request device status."""
         if not self.is_connected or not self.mqtt_client:
-            mqtt_log(f"⚠️ Cannot request status - client not connected for {self.device_name}")
+            self.mqtt_logger.warning("⚠️ Cannot request status - client not connected for %s", self.device_name)
             return False
         
         topic = f"si/app/v2/{self.device_imei}/status"
         payload = json.dumps({"method": "GET"})
         
-        mqtt_log(f"📤 Publishing status request for {self.device_name}")
+        self.mqtt_logger.warning("Publishing status request for %s", self.device_name)
             
         result = self.mqtt_client.publish(topic, payload, qos=1)
         
         if result.rc != 0:
-            mqtt_log(f"❌ Failed to publish status request for {self.device_name}, code: {result.rc}")
+            self.mqtt_logger.error("❌ Failed to publish status request for %s, code: %s", 
+                              self.device_name, result.rc)
             return False
         
-        mqtt_log(f"📤 Status request published successfully for {self.device_name}")
+        self.mqtt_logger.warning("Status request published successfully for %s", self.device_name)
         return True
 
     def publish_action(self, action_cmd: str, area_num: int):
         """Publish an action command to the device."""
         if not self.is_connected or not self.mqtt_client:
-            mqtt_log(f"⚠️ Cannot publish action - client not connected for {self.device_name}")
+            self.mqtt_logger.warning("⚠️ Cannot publish action - client not connected for %s", self.device_name)
             return False
         
         topic = f"si/app/v2/{self.device_imei}/control"
@@ -248,15 +229,18 @@ class OlarmMqttClient:
             "data": [action_cmd, area_num]
         })
         
-        mqtt_log(f"📤 Publishing action '{action_cmd}' for area {area_num} to {self.device_name}")
+        self.mqtt_logger.warning("Publishing action '%s' for area %s to %s", 
+                           action_cmd, area_num, self.device_name)
             
         result = self.mqtt_client.publish(topic, payload, qos=1)
         
         if result.rc != 0:
-            mqtt_log(f"❌ Failed to publish action for {self.device_name}, code: {result.rc}")
+            self.mqtt_logger.error("❌ Failed to publish action for %s, code: %s", 
+                              self.device_name, result.rc)
             return False
         
-        mqtt_log(f"✅ Action '{action_cmd}' for area {area_num} published to {self.device_name}")
+        self.mqtt_logger.warning("✅ Action '%s' for area %s published to %s", 
+                           action_cmd, area_num, self.device_name)
         return True
 
     def disconnect(self):
@@ -266,20 +250,19 @@ class OlarmMqttClient:
             self.mqtt_client.disconnect()
             self.is_connected = False
             self.subscribed_topics.clear()
-            mqtt_log(f"Disconnected from broker for {self.device_name}")
+            self.mqtt_logger.warning("Disconnected from broker for %s", self.device_name)
             
     def get_status(self) -> Dict[str, Any]:
         """Get the status of this MQTT client."""
-        import time
-        current_time = time.time()
+        now = time.time()
         
         uptime = None
         if self.connection_time:
-            uptime = int(current_time - self.connection_time)
+            uptime = int(now - self.connection_time)
             
         last_msg_age = None
         if self.last_message_time:
-            last_msg_age = int(current_time - self.last_message_time)
+            last_msg_age = int(now - self.last_message_time)
             
         status = {
             "device_id": self.device_id,
@@ -292,7 +275,7 @@ class OlarmMqttClient:
         }
         
         # Log the status
-        mqtt_log(f"STATUS [{self.device_name}]: Connected={self.is_connected}, " +
-                f"Messages={self.messages_received}")
+        self.mqtt_logger.warning("STATUS [%s]: Connected=%s, Messages=%d",
+                            self.device_name, self.is_connected, self.messages_received)
         
         return status
