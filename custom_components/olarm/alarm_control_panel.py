@@ -34,6 +34,7 @@ from .const import (
     STATE_DISARMED,
     STATE_PENDING,
     STATE_TRIGGERED,
+    CONF_MQTT_ONLY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,6 +65,10 @@ async def async_setup_entry(
     mqtt_enabled = entry_data.get("mqtt_enabled", False)
     mqtt_clients = entry_data.get("mqtt_clients", {})
     message_handler = entry_data.get("message_handler")
+    mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
+    
+    if mqtt_only:
+        _LOGGER.warning("⚠️ MQTT-ONLY MODE: API fallback is disabled for all devices")
     
     # Add alarm panels for each area in each device
     for device_id, device in coordinator.data.items():
@@ -94,6 +99,7 @@ async def async_setup_entry(
                         mqtt_client,
                         message_handler,
                         mqtt_enabled,
+                        mqtt_only,
                     )
                 )
     
@@ -113,6 +119,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         mqtt_client: Optional[OlarmMqttClient] = None,
         message_handler = None,
         mqtt_enabled: bool = False,
+        mqtt_only: bool = False,
     ):
         """Initialize the alarm panel."""
         super().__init__(coordinator)
@@ -124,6 +131,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         self._mqtt_client = mqtt_client
         self._message_handler = message_handler
         self._mqtt_enabled = mqtt_enabled
+        self._mqtt_only = mqtt_only
         self._current_state = None
         
         self._attr_unique_id = f"{device_id}_area_{area_num}"
@@ -233,110 +241,154 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         """Send disarm command."""
         # Try MQTT first if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
-            _LOGGER.info("🔄 Using MQTT to disarm area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to disarm area %s", 
+                         self._device_name, self._area_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_DISARM, self._area_num)
             if success:
                 return
-            _LOGGER.warning("⚠️ MQTT disarm failed, falling back to API")
+            
+            if self._mqtt_only:
+                _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT disarm command failed and API fallback is disabled", 
+                             self._device_name)
+                return
+                
+            _LOGGER.warning("⚠️ MQTT [%s]: MQTT disarm failed, falling back to API", self._device_name)
         else:
             if self._mqtt_enabled:
-                _LOGGER.info("ℹ️ MQTT client not connected, using API for disarm")
+                if self._mqtt_only:
+                    _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT client not connected and API fallback is disabled", 
+                                 self._device_name)
+                    return
+                _LOGGER.warning("ℹ️ MQTT [%s]: MQTT client not connected, using API for disarm", 
+                             self._device_name)
             else:
                 _LOGGER.debug("Using API for disarm (MQTT not enabled)")
         
-        # Fall back to API
+        # Fall back to API (if allowed)
         try:
-            _LOGGER.info("🔄 Using API to disarm area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 API [%s]: Using API to disarm area %s", 
+                         self._device_name, self._area_name)
             await self._client.send_device_action(
                 self._device_id, CMD_DISARM, self._area_num
             )
-            _LOGGER.info("✅ API disarm command sent successfully")
+            _LOGGER.warning("✅ API [%s]: API disarm command sent successfully", self._device_name)
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("❌ Error disarming alarm via API: %s", err)
+            _LOGGER.error("❌ API [%s]: Error disarming alarm via API: %s", self._device_name, err)
 
     async def async_alarm_arm_away(self, code: Optional[str] = None) -> None:
         """Send arm away command."""
         # Try MQTT first if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
-            _LOGGER.info("🔄 Using MQTT to arm away area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm away area %s", 
+                          self._device_name, self._area_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_AWAY, self._area_num)
             if success:
                 return
-            _LOGGER.warning("⚠️ MQTT arm away failed, falling back to API")
+                
+            if self._mqtt_only:
+                _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT arm away command failed and API fallback is disabled", 
+                             self._device_name)
+                return
+                
+            _LOGGER.warning("⚠️ MQTT [%s]: MQTT arm away failed, falling back to API", self._device_name)
         else:
             if self._mqtt_enabled:
-                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm away")
+                if self._mqtt_only:
+                    _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT client not connected and API fallback is disabled", 
+                                 self._device_name)
+                    return
+                _LOGGER.warning("ℹ️ MQTT [%s]: MQTT client not connected, using API for arm away", 
+                              self._device_name)
             else:
                 _LOGGER.debug("Using API for arm away (MQTT not enabled)")
                 
-        # Fall back to API
+        # Fall back to API (if allowed)
         try:
-            _LOGGER.info("🔄 Using API to arm away area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 API [%s]: Using API to arm away area %s", 
+                          self._device_name, self._area_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_AWAY, self._area_num
             )
-            _LOGGER.info("✅ API arm away command sent successfully")
+            _LOGGER.warning("✅ API [%s]: API arm away command sent successfully", self._device_name)
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("❌ Error arming away via API: %s", err)
+            _LOGGER.error("❌ API [%s]: Error arming away via API: %s", self._device_name, err)
 
     async def async_alarm_arm_home(self, code: Optional[str] = None) -> None:
         """Send arm home command."""
         # Try MQTT first if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
-            _LOGGER.info("🔄 Using MQTT to arm home area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm home area %s", 
+                          self._device_name, self._area_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_HOME, self._area_num)
             if success:
                 return
-            _LOGGER.warning("⚠️ MQTT arm home failed, falling back to API")
+                
+            if self._mqtt_only:
+                _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT arm home command failed and API fallback is disabled", 
+                            self._device_name)
+                return
+                
+            _LOGGER.warning("⚠️ MQTT [%s]: MQTT arm home failed, falling back to API", self._device_name)
         else:
             if self._mqtt_enabled:
-                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm home")
+                if self._mqtt_only:
+                    _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT client not connected and API fallback is disabled", 
+                                 self._device_name)
+                    return
+                _LOGGER.warning("ℹ️ MQTT [%s]: MQTT client not connected, using API for arm home", 
+                              self._device_name)
             else:
                 _LOGGER.debug("Using API for arm home (MQTT not enabled)")
                 
-        # Fall back to API
+        # Fall back to API (if allowed)
         try:
-            _LOGGER.info("🔄 Using API to arm home area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 API [%s]: Using API to arm home area %s", 
+                          self._device_name, self._area_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_HOME, self._area_num
             )
-            _LOGGER.info("✅ API arm home command sent successfully")
+            _LOGGER.warning("✅ API [%s]: API arm home command sent successfully", self._device_name)
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("❌ Error arming home via API: %s", err)
+            _LOGGER.error("❌ API [%s]: Error arming home via API: %s", self._device_name, err)
 
     async def async_alarm_arm_night(self, code: Optional[str] = None) -> None:
         """Send arm night command."""
         # Try MQTT first if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
-            _LOGGER.info("🔄 Using MQTT to arm night area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm night area %s", 
+                         self._device_name, self._area_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_NIGHT, self._area_num)
             if success:
                 return
-            _LOGGER.warning("⚠️ MQTT arm night failed, falling back to API")
+                
+            if self._mqtt_only:
+                _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT arm night command failed and API fallback is disabled", 
+                             self._device_name)
+                return
+                
+            _LOGGER.warning("⚠️ MQTT [%s]: MQTT arm night failed, falling back to API", self._device_name)
         else:
             if self._mqtt_enabled:
-                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm night")
+                if self._mqtt_only:
+                    _LOGGER.error("❌ MQTT-ONLY MODE [%s]: MQTT client not connected and API fallback is disabled", 
+                                 self._device_name)
+                    return
+                _LOGGER.warning("ℹ️ MQTT [%s]: MQTT client not connected, using API for arm night", 
+                              self._device_name)
             else:
                 _LOGGER.debug("Using API for arm night (MQTT not enabled)")
                 
-        # Fall back to API
+        # Fall back to API (if allowed)
         try:
-            _LOGGER.info("🔄 Using API to arm night area %s on device %s", 
-                        self._area_num, self._device_name)
+            _LOGGER.warning("🔄 API [%s]: Using API to arm night area %s", 
+                          self._device_name, self._area_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_NIGHT, self._area_num
             )
-            _LOGGER.info("✅ API arm night command sent successfully")
+            _LOGGER.warning("✅ API [%s]: API arm night command sent successfully", self._device_name)
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("❌ Error arming night via API: %s", err)
+            _LOGGER.error("❌ API [%s]: Error arming night via API: %s", self._device_name, err)

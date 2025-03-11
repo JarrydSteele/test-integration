@@ -6,6 +6,8 @@ PLATFORMS = ["alarm_control_panel", "binary_sensor", "switch"]
 CONF_API_KEY = "api_key"
 CONF_USER_EMAIL_PHONE = "user_email_phone"
 CONF_USER_PASS = "user_pass"
+CONF_MQTT_ONLY = "mqtt_only"
+CONF_DEBUG_MQTT = "debug_mqtt"
 DEFAULT_SCAN_INTERVAL = 30
 
 # Alarm States
@@ -51,3 +53,6 @@ MQTT_PROTOCOL = "wss"
 # Signal constants
 SIGNAL_OLARM_MQTT_UPDATE = f"{DOMAIN}_mqtt_update"
 SIGNAL_OLARM_API_UPDATE = f"{DOMAIN}_api_update"
+
+# Service names
+SERVICE_CHECK_MQTT_STATUS = "check_mqtt_status"

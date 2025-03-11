@@ -37,7 +37,7 @@ class OlarmMessageHandler:
             
             # Process alarm payload
             if data.get("type") == "alarmPayload":
-                _LOGGER.info("📩 MQTT: Received alarm state update for device %s", device_id)
+                _LOGGER.warning("📩 MQTT: Received alarm state update for device %s", device_id)
                 await self._process_alarm_payload(device_id, data)
             else:
                 _LOGGER.debug("MQTT: Received non-alarm message type: %s for device %s", 
@@ -88,7 +88,7 @@ class OlarmMessageHandler:
                 # Check if state changed
                 prev_areas = self.device_areas.get(device_id, [])
                 if i < len(prev_areas) and prev_areas[i].get("area_state") != area_state:
-                    _LOGGER.info("✅ MQTT: Area %s state changed to %s", area_name, area_state)
+                    _LOGGER.warning("✅ MQTT: Area %s state changed to %s", area_name, area_state)
                     areas_updated = True
             
             # Update device areas
@@ -100,7 +100,7 @@ class OlarmMessageHandler:
                 async_dispatcher_send(self.hass, signal, area)
             
             if areas_updated:
-                _LOGGER.info("✅ MQTT: Updated %d areas for device %s", len(areas), device_id)
+                _LOGGER.warning("✅ MQTT: Updated %d areas for device %s", len(areas), device_id)
         
         # Process zones
         zones_updated = False
@@ -119,7 +119,7 @@ class OlarmMessageHandler:
                 # Check if state changed
                 prev_zones = self.device_zones.get(device_id, [])
                 if i < len(prev_zones) and prev_zones[i].get("zone_state") != zone_state:
-                    _LOGGER.info("✅ MQTT: Zone %s state changed to %s", i+1, zone_state)
+                    _LOGGER.warning("✅ MQTT: Zone %s state changed to %s", i+1, zone_state)
                     zones_updated = True
             
             # Update device zones
@@ -131,7 +131,7 @@ class OlarmMessageHandler:
                 async_dispatcher_send(self.hass, signal, zone)
             
             if zones_updated:
-                _LOGGER.info("✅ MQTT: Updated %d zones for device %s", len(zones), device_id)
+                _LOGGER.warning("✅ MQTT: Updated %d zones for device %s", len(zones), device_id)
         
         # Also send a general update signal
         async_dispatcher_send(self.hass, f"{DOMAIN}_{device_id}_update", self.device_state[device_id])

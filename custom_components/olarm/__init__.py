@@ -20,10 +20,13 @@ from .const import (
     CONF_API_KEY,
     CONF_USER_EMAIL_PHONE,
     CONF_USER_PASS,
+    CONF_MQTT_ONLY,
+    CONF_DEBUG_MQTT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     PLATFORMS,
     SIGNAL_OLARM_MQTT_UPDATE,
+    SERVICE_CHECK_MQTT_STATUS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +43,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Set up data structures
     hass.data[DOMAIN].setdefault(entry.entry_id, {})
     entry_data = hass.data[DOMAIN][entry.entry_id]
+    mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
+    debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, False)
     
     # Initialize either with API key or email/password auth
     if CONF_API_KEY in entry.data:
@@ -58,7 +63,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
     elif CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
         # New email/password auth with MQTT support
-        _LOGGER.debug("Setting up with email/password authentication")
+        _LOGGER.warning("Setting up with email/password authentication")
+        
+        if mqtt_only:
+            _LOGGER.warning("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
         
         # Initialize auth
         auth = OlarmAuth(
@@ -94,21 +102,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
         # Set up MQTT clients for each device
         mqtt_clients = {}
-        _LOGGER.info("🔄 Setting up MQTT connections for %d device(s)...", len(devices))
+        _LOGGER.warning("🔄 Setting up MQTT connections for %d device(s)...", len(devices))
         
         for device in devices:
             device_id = device["id"]
             imei = device["imei"]
             device_name = device.get("name", "Unknown Device")
             
-            _LOGGER.info("🔄 Setting up MQTT for device: %s (ID: %s)", device_name, device_id)
+            _LOGGER.warning("🔄 Setting up MQTT for device: %s (ID: %s)", device_name, device_id)
             
             # Create MQTT client
             mqtt_client = OlarmMqttClient(
                 hass, 
                 imei, 
                 tokens["access_token"],
-                device_id
+                device_id,
+                device_name,
+                debug_mqtt
             )
             
             # Register message callback
@@ -117,30 +127,85 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             # Connect to MQTT
             connected = await mqtt_client.connect()
             if connected:
-                _LOGGER.info("✅ MQTT successfully connected for device: %s", device_name)
+                _LOGGER.warning("✅ MQTT successfully connected for device: %s", device_name)
                 mqtt_clients[device_id] = mqtt_client
             else:
                 _LOGGER.error("❌ Failed to connect to MQTT for device: %s", device_name)
-                _LOGGER.warning("⚠️ Falling back to API polling for device: %s", device_name)
+                
+                if mqtt_only:
+                    _LOGGER.error("⚠️ MQTT-ONLY MODE: This device will be unavailable")
+                else:
+                    _LOGGER.warning("⚠️ Falling back to API polling for device: %s", device_name)
         
         entry_data["mqtt_clients"] = mqtt_clients
         
         if mqtt_clients:
             mqtt_count = len(mqtt_clients)
             total_count = len(devices)
-            _LOGGER.info(
+            _LOGGER.warning(
                 "✅ MQTT setup complete: %d/%d devices connected (%s%%)",
                 mqtt_count, total_count, int(mqtt_count/total_count*100) if total_count > 0 else 0
             )
             entry_data["mqtt_enabled"] = True
         else:
-            _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
+            if mqtt_only:
+                _LOGGER.error("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
+            else:
+                _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
             entry_data["mqtt_enabled"] = False
     
     else:
         # This shouldn't happen
         _LOGGER.error("Neither API key nor email/password provided")
         return False
+    
+    # Register the MQTT status service
+    async def async_check_mqtt_status(call):
+        """Service to check MQTT status."""
+        if "mqtt_clients" not in entry_data:
+            _LOGGER.warning("No MQTT clients available - email/password authentication required for MQTT support")
+            return
+            
+        mqtt_clients = entry_data["mqtt_clients"]
+        if not mqtt_clients:
+            _LOGGER.warning("No active MQTT clients found")
+            return
+            
+        for device_id, client in mqtt_clients.items():
+            status = client.get_status()
+            _LOGGER.warning(
+                "MQTT Status for %s (%s): %s", 
+                status["device_name"], device_id,
+                "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
+            )
+            
+            if status["is_connected"]:
+                uptime = "Unknown"
+                if status["uptime_seconds"] is not None:
+                    minutes, seconds = divmod(status["uptime_seconds"], 60)
+                    hours, minutes = divmod(minutes, 60)
+                    uptime = f"{hours}h {minutes}m {seconds}s"
+                
+                last_msg = "Never"
+                if status["last_message_seconds_ago"] is not None:
+                    minutes, seconds = divmod(status["last_message_seconds_ago"], 60)
+                    hours, minutes = divmod(minutes, 60)
+                    last_msg = f"{hours}h {minutes}m {seconds}s ago"
+                
+                _LOGGER.warning(
+                    "  - Connected for: %s, %d messages received, last message: %s",
+                    uptime, status["messages_received"], last_msg
+                )
+            
+            # Request a status update from each client to verify it still works
+            if status["is_connected"]:
+                _LOGGER.warning("  - Testing connection by requesting status update...")
+                client.publish_status_request()
+    
+    # Register the service
+    hass.services.async_register(
+        DOMAIN, SERVICE_CHECK_MQTT_STATUS, async_check_mqtt_status
+    )
     
     # Load platform entities
     for platform in PLATFORMS:

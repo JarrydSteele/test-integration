@@ -8,6 +8,8 @@
           "api_key": "API Key (Legacy method)",
           "user_email_phone": "Email or Phone Number",
           "user_pass": "Password",
+          "mqtt_only": "MQTT Only Mode (no API fallback)",
+          "debug_mqtt": "Enable extra MQTT logging",
           "name": "Name"
         }
       }
@@ -19,6 +21,12 @@
     },
     "abort": {
       "already_configured": "This Olarm account is already configured"
+    }
+  },
+  "services": {
+    "check_mqtt_status": {
+      "name": "Check MQTT Status",
+      "description": "Check and log the status of all MQTT connections"
     }
   }
 }

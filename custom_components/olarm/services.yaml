@@ -1,0 +1,5 @@
+check_mqtt_status:
+  name: Check MQTT Status
+  description: >-
+    Checks the status of all MQTT connections and logs the results.
+    This can help troubleshoot MQTT connection issues.

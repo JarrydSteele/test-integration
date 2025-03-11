@@ -19,7 +19,14 @@ except ImportError:
     # Handle fallback for import errors
     from api import OlarmApiClient, OlarmApiError
 
-from .const import DOMAIN, CONF_USER_EMAIL_PHONE, CONF_USER_PASS, CONF_API_KEY
+from .const import (
+    DOMAIN, 
+    CONF_USER_EMAIL_PHONE, 
+    CONF_USER_PASS, 
+    CONF_API_KEY,
+    CONF_MQTT_ONLY,
+    CONF_DEBUG_MQTT
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +54,7 @@ class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            # Support both authentication methods
+            # Support both authentication methods (API key for backward compatibility)
             if CONF_API_KEY in user_input and user_input[CONF_API_KEY]:
                 api_key = user_input[CONF_API_KEY]
                 # Create the config entry
@@ -58,6 +65,8 @@ class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             elif CONF_USER_EMAIL_PHONE in user_input and CONF_USER_PASS in user_input:
                 user_email_phone = user_input[CONF_USER_EMAIL_PHONE]
                 user_pass = user_input[CONF_USER_PASS]
+                mqtt_only = user_input.get(CONF_MQTT_ONLY, False)
+                debug_mqtt = user_input.get(CONF_DEBUG_MQTT, False)
                 
                 # Validate credentials
                 if await validate_auth(self.hass, user_email_phone, user_pass):
@@ -67,6 +76,8 @@ class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         data={
                             CONF_USER_EMAIL_PHONE: user_email_phone,
                             CONF_USER_PASS: user_pass,
+                            CONF_MQTT_ONLY: mqtt_only,
+                            CONF_DEBUG_MQTT: debug_mqtt,
                         },
                     )
                 else:
@@ -80,6 +91,8 @@ class OlarmConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_API_KEY): str,
                 vol.Optional(CONF_USER_EMAIL_PHONE): str,
                 vol.Optional(CONF_USER_PASS): str,
+                vol.Optional(CONF_MQTT_ONLY, default=False): bool,
+                vol.Optional(CONF_DEBUG_MQTT, default=False): bool,
                 vol.Optional(CONF_NAME, default="Olarm"): str,
             }
         )
