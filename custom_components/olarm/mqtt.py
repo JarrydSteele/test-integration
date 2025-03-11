@@ -3,7 +3,24 @@ import asyncio
 import json
 import logging
 import sys
+print("\n\n========== OLARM MQTT MODULE LOADED ==========\n\n", flush=True)
 from typing import Dict, List, Optional, Callable, Any, Awaitable
+
+# Extremely direct diagnostic logger that will bypass all filtering
+def direct_log(message):
+    with open("/config/olarm_mqtt.log", "a") as f:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"{timestamp} - {message}\n")
+    print(f"\n⚠️ OLARM MQTT: {message}\n", flush=True)
+
+# Add diagnostic info
+direct_log("MQTT module initialized")
+try:
+    import paho.mqtt.client
+    direct_log("✅ PAHO-MQTT IMPORTED SUCCESSFULLY")
+except ImportError as e:
+    direct_log(f"❌ PAHO-MQTT IMPORT ERROR: {e}")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +93,9 @@ class OlarmMqttClient:
 
     async def connect(self) -> bool:
         """Connect to MQTT broker."""
+
+        direct_log(f"Attempting to connect to MQTT for device {self.device_name} (IMEI: {self.device_imei})")
+
         # Skip if paho-mqtt is not installed
         if mqtt_client is None:
             mqtt_log(f"❌ Cannot connect - paho-mqtt is not installed")
@@ -90,6 +110,8 @@ class OlarmMqttClient:
             self.mqtt_client.ws_set_options(path="/mqtt")  # WebSocket path
             self.mqtt_client.username_pw_set(MQTT_USERNAME, self.access_token)
             
+            direct_log(f"MQTT client created with ID: {client_id}, username: {MQTT_USERNAME}")
+
             # Set callbacks
             self.mqtt_client.on_connect = self.on_connect
             self.mqtt_client.on_disconnect = self.on_disconnect
@@ -98,6 +120,8 @@ class OlarmMqttClient:
             # Setup TLS for secure connection
             self.mqtt_client.tls_set()
             
+            direct_log(f"Connecting to {MQTT_HOST}:{MQTT_PORT} via WebSockets")
+
             # Connect
             mqtt_log(f"🔄 Connecting to {MQTT_HOST}:{MQTT_PORT} with client ID {client_id}")
             self.mqtt_client.connect(MQTT_HOST, MQTT_PORT)
@@ -124,6 +148,9 @@ class OlarmMqttClient:
 
     def on_connect(self, client, userdata, flags, rc):
         """Handle connection established callback."""
+
+        direct_log(f"on_connect called with result code {rc} for {self.device_name}")
+        
         if rc == 0:
             import time
             self.connection_time = time.time()

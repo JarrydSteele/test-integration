@@ -2,6 +2,7 @@
 import os
 import logging
 import json
+import sys
 import time
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -14,6 +15,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import json as json_util
 
 from .const import DOMAIN, CONF_USER_EMAIL_PHONE, CONF_USER_PASS
+
+def auth_log(message):
+    """Direct log for auth debugging."""
+    with open("/config/olarm_auth.log", "a") as f:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"{timestamp} - {message}\n")
+    print(f"\n🔑 OLARM AUTH: {message}\n", flush=True)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +52,9 @@ class OlarmAuth:
 
     async def initialize(self) -> bool:
         """Initialize authentication."""
+
+        auth_log(f"Initializing auth for user: {self.user_email_phone}")
+
         # Load tokens from storage
         await self._load_tokens_from_storage()
         
@@ -57,6 +69,9 @@ class OlarmAuth:
 
     async def login(self) -> bool:
         """Log in to Olarm and obtain tokens."""
+
+        auth_log(f"Attempting login for: {self.user_email_phone}")
+
         _LOGGER.info("Logging in to Olarm")
         try:
             async with async_timeout.timeout(30):
@@ -79,6 +94,9 @@ class OlarmAuth:
                 self.refresh_token = data.get("ort")
                 self.token_expiration = data.get("oatExpire")
                 
+                auth_log(f"Login successful! Access token: {self.access_token[:10]}...")
+                auth_log(f"Token expiration: {self.token_expiration}")
+
                 # Fetch user index
                 await self._fetch_user_index()
                 
@@ -113,6 +131,8 @@ class OlarmAuth:
                         "captchaToken": "olarmapp",
                     },
                 )
+
+                auth_log(f"User index response: {response.status}")
                 
                 if response.status != 200:
                     response_text = await response.text()
@@ -122,6 +142,8 @@ class OlarmAuth:
                 data = await response.json()
                 self.user_index = data.get("userIndex")
                 self.user_id = data.get("userId")
+
+                auth_log(f"User index: {self.user_index}, User ID: {self.user_id}")
                 
                 _LOGGER.debug("User index: %s, User ID: %s", self.user_index, self.user_id)
                 return True
@@ -132,6 +154,9 @@ class OlarmAuth:
 
     async def _fetch_devices(self) -> bool:
         """Fetch devices from Olarm API."""
+
+        auth_log(f"Fetching devices for user index: {self.user_index}")
+
         if not self.access_token or self.user_index is None:
             _LOGGER.error("Cannot fetch devices: Missing access token or user index")
             return False
@@ -157,6 +182,10 @@ class OlarmAuth:
                     "name": device.get("name", "Olarm Device"),
                     # Add other relevant device properties
                 } for device in data.get("devices", [])]
+
+                auth_log(f"Found {len(self.devices)} devices")
+                for device in self.devices:
+                    auth_log(f"Device: {device.get('name', 'Unknown')}, IMEI: {device.get('imei', 'Unknown')}")
                 
                 _LOGGER.debug("Fetched %s devices", len(self.devices))
                 return True
