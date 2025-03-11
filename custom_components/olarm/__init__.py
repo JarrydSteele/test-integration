@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from datetime import timedelta
+from .debug import mqtt_log
 
 import aiohttp
 import voluptuous as vol
@@ -153,6 +154,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             else:
                 _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
             entry_data["mqtt_enabled"] = False
+
+        if mqtt_clients:
+            # Set up a periodic task to check MQTT status
+            async def check_mqtt_periodically(now=None):
+                """Check MQTT status periodically and log results."""
+                mqtt_log("Performing periodic MQTT check")
+                for device_id, client in mqtt_clients.items():
+                    status = client.get_status()
+                    connected = "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
+                    mqtt_log(f"[{status['device_name']}]: {connected}, Messages: {status['messages_received']}")
+                    
+                    # If connected, request a status update
+                    if status["is_connected"]:
+                        client.publish_status_request()
+                        mqtt_log(f"[{status['device_name']}]: Requesting update via MQTT")
+            
+        # Register a periodic check every 5 minutes
+        mqtt_log("Setting up periodic MQTT checks every 5 minutes")
+        track_time_interval(hass, check_mqtt_periodically, timedelta(minutes=5))
+        
+        # Also run once at startup
+        hass.async_create_task(check_mqtt_periodically())
     
     else:
         # This shouldn't happen

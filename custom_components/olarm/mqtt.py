@@ -3,8 +3,14 @@ import asyncio
 import json
 import logging
 from typing import Dict, List, Optional, Callable, Any, Awaitable
+from .debug import mqtt_log
 
-import paho.mqtt.client as mqtt_client
+try:
+    import paho.mqtt.client as mqtt_client
+    _LOGGER.warning("✅ paho-mqtt is installed correctly")
+except ImportError:
+    _LOGGER.error("❌ paho-mqtt is NOT installed! MQTT won't work!")
+
 from paho.mqtt.client import MQTTMessage
 
 from homeassistant.core import HomeAssistant
@@ -107,8 +113,8 @@ class OlarmMqttClient:
         if rc == 0:
             import time
             self.connection_time = time.time()
-            _LOGGER.warning(
-                "✅ MQTT [%s]: Successfully connected to broker (IMEI: %s)",
+            mqtt_log(f"✅ [CONNECTED] {self.device_name} (IMEI: {self.device_imei})")
+            _LOGGER.warning("✅ MQTT [%s]: Successfully connected to broker (IMEI: %s)",
                 self.device_name, self.device_imei
             )
             self.is_connected = True
@@ -117,11 +123,14 @@ class OlarmMqttClient:
             topic = f"so/app/v1/{self.device_imei}"
             self.mqtt_client.subscribe(topic)
             self.subscribed_topics.add(topic)
+            mqtt_log(f"📥 [SUBSCRIBED] {self.device_name}: {topic}")
             _LOGGER.warning("📥 MQTT [%s]: Subscribed to topic: %s", self.device_name, topic)
             
             # Request device status
+            mqtt_log(f"📤 [REQUESTING] {self.device_name}: Sending status request")
             self.publish_status_request()
         else:
+            mqtt_log(f"❌ [FAILED] {self.device_name}: Failed to connect, code: {rc}")
             _LOGGER.error(
                 "❌ MQTT [%s]: Failed to connect to broker, return code: %s",
                 self.device_name, rc
@@ -149,14 +158,17 @@ class OlarmMqttClient:
         self.messages_received += 1
         self.last_message_time = time.time()
         
+        mqtt_log(f"📩 [MESSAGE] {self.device_name}: #{self.messages_received} on {topic}")
+        
         if self.debug_mqtt:
+            mqtt_log(f"🔍 [PAYLOAD] {payload[:100]}{'...' if len(payload) > 100 else ''}")
             _LOGGER.warning("📩 MQTT [%s]: Received message #%d on topic %s: %s", 
-                          self.device_name, self.messages_received, topic, 
-                          payload[:100] + "..." if len(payload) > 100 else payload)
+                        self.device_name, self.messages_received, topic, 
+                        payload[:100] + "..." if len(payload) > 100 else payload)
         else:
             _LOGGER.warning("📩 MQTT [%s]: Received message #%d on topic %s", 
-                          self.device_name, self.messages_received, topic)
-        
+                        self.device_name, self.messages_received, topic)
+            
         # Process message in the event loop
         asyncio.run_coroutine_threadsafe(
             self._process_message(topic, payload), 
