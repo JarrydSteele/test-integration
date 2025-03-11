@@ -1,0 +1,9 @@
+{
+  "name": "Olarm",
+  "content_in_root": false,
+  "render_readme": true,
+  "domains": ["alarm_control_panel", "binary_sensor", "switch"],
+  "country": ["US", "CA", "AU", "NZ", "ZA", "UK"],
+  "homeassistant": "2022.10.0",
+  "iot_class": "cloud_polling"
+}
