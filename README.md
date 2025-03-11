@@ -114,6 +114,15 @@ To enable debug logs, add the following to your `configuration.yaml`:
 logger:
   default: info
   logs:
+    custom_components.olarm: info
+```
+
+For even more detailed logging (including all MQTT messages), you can use:
+
+```yaml
+logger:
+  default: info
+  logs:
     custom_components.olarm: debug
 ```
 

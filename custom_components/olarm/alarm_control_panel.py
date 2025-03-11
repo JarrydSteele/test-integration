@@ -232,75 +232,111 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
     async def async_alarm_disarm(self, code: Optional[str] = None) -> None:
         """Send disarm command."""
         # Try MQTT first if available
-        if self._mqtt_enabled and self._mqtt_client:
-            _LOGGER.debug("Sending disarm command via MQTT for area %s", self._area_num)
+        if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
+            _LOGGER.info("🔄 Using MQTT to disarm area %s on device %s", 
+                        self._area_num, self._device_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_DISARM, self._area_num)
             if success:
                 return
+            _LOGGER.warning("⚠️ MQTT disarm failed, falling back to API")
+        else:
+            if self._mqtt_enabled:
+                _LOGGER.info("ℹ️ MQTT client not connected, using API for disarm")
+            else:
+                _LOGGER.debug("Using API for disarm (MQTT not enabled)")
         
         # Fall back to API
         try:
-            _LOGGER.debug("Sending disarm command via API for area %s", self._area_num)
+            _LOGGER.info("🔄 Using API to disarm area %s on device %s", 
+                        self._area_num, self._device_name)
             await self._client.send_device_action(
                 self._device_id, CMD_DISARM, self._area_num
             )
+            _LOGGER.info("✅ API disarm command sent successfully")
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("Error disarming alarm: %s", err)
+            _LOGGER.error("❌ Error disarming alarm via API: %s", err)
 
     async def async_alarm_arm_away(self, code: Optional[str] = None) -> None:
         """Send arm away command."""
         # Try MQTT first if available
-        if self._mqtt_enabled and self._mqtt_client:
-            _LOGGER.debug("Sending arm away command via MQTT for area %s", self._area_num)
+        if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
+            _LOGGER.info("🔄 Using MQTT to arm away area %s on device %s", 
+                        self._area_num, self._device_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_AWAY, self._area_num)
             if success:
                 return
+            _LOGGER.warning("⚠️ MQTT arm away failed, falling back to API")
+        else:
+            if self._mqtt_enabled:
+                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm away")
+            else:
+                _LOGGER.debug("Using API for arm away (MQTT not enabled)")
                 
         # Fall back to API
         try:
-            _LOGGER.debug("Sending arm away command via API for area %s", self._area_num)
+            _LOGGER.info("🔄 Using API to arm away area %s on device %s", 
+                        self._area_num, self._device_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_AWAY, self._area_num
             )
+            _LOGGER.info("✅ API arm away command sent successfully")
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("Error arming away: %s", err)
+            _LOGGER.error("❌ Error arming away via API: %s", err)
 
     async def async_alarm_arm_home(self, code: Optional[str] = None) -> None:
         """Send arm home command."""
         # Try MQTT first if available
-        if self._mqtt_enabled and self._mqtt_client:
-            _LOGGER.debug("Sending arm home command via MQTT for area %s", self._area_num)
+        if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
+            _LOGGER.info("🔄 Using MQTT to arm home area %s on device %s", 
+                        self._area_num, self._device_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_HOME, self._area_num)
             if success:
                 return
+            _LOGGER.warning("⚠️ MQTT arm home failed, falling back to API")
+        else:
+            if self._mqtt_enabled:
+                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm home")
+            else:
+                _LOGGER.debug("Using API for arm home (MQTT not enabled)")
                 
         # Fall back to API
         try:
-            _LOGGER.debug("Sending arm home command via API for area %s", self._area_num)
+            _LOGGER.info("🔄 Using API to arm home area %s on device %s", 
+                        self._area_num, self._device_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_HOME, self._area_num
             )
+            _LOGGER.info("✅ API arm home command sent successfully")
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("Error arming home: %s", err)
+            _LOGGER.error("❌ Error arming home via API: %s", err)
 
     async def async_alarm_arm_night(self, code: Optional[str] = None) -> None:
         """Send arm night command."""
         # Try MQTT first if available
-        if self._mqtt_enabled and self._mqtt_client:
-            _LOGGER.debug("Sending arm night command via MQTT for area %s", self._area_num)
+        if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
+            _LOGGER.info("🔄 Using MQTT to arm night area %s on device %s", 
+                        self._area_num, self._device_name)
             success = self._mqtt_client.publish_action(MQTT_CMD_ARM_NIGHT, self._area_num)
             if success:
                 return
+            _LOGGER.warning("⚠️ MQTT arm night failed, falling back to API")
+        else:
+            if self._mqtt_enabled:
+                _LOGGER.info("ℹ️ MQTT client not connected, using API for arm night")
+            else:
+                _LOGGER.debug("Using API for arm night (MQTT not enabled)")
                 
         # Fall back to API
         try:
-            _LOGGER.debug("Sending arm night command via API for area %s", self._area_num)
+            _LOGGER.info("🔄 Using API to arm night area %s on device %s", 
+                        self._area_num, self._device_name)
             await self._client.send_device_action(
                 self._device_id, CMD_ARM_NIGHT, self._area_num
             )
+            _LOGGER.info("✅ API arm night command sent successfully")
             await self.coordinator.async_request_refresh()
         except OlarmApiError as err:
-            _LOGGER.error("Error arming night: %s", err)
+            _LOGGER.error("❌ Error arming night via API: %s", err)

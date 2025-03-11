@@ -37,20 +37,21 @@ class OlarmMessageHandler:
             
             # Process alarm payload
             if data.get("type") == "alarmPayload":
-                _LOGGER.debug("Processing alarm payload for device %s", device_id)
+                _LOGGER.info("📩 MQTT: Received alarm state update for device %s", device_id)
                 await self._process_alarm_payload(device_id, data)
             else:
-                _LOGGER.debug("Received non-alarm MQTT message type: %s", data.get("type"))
+                _LOGGER.debug("MQTT: Received non-alarm message type: %s for device %s", 
+                             data.get("type"), device_id)
         
         except json.JSONDecodeError:
-            _LOGGER.error("Failed to parse MQTT message as JSON: %s", payload)
+            _LOGGER.error("❌ MQTT: Failed to parse message as JSON: %s", payload[:100])
         except Exception as ex:
-            _LOGGER.error("Error processing MQTT message: %s", ex)
+            _LOGGER.error("❌ MQTT: Error processing message: %s", ex)
 
     async def _process_alarm_payload(self, device_id: str, payload: dict) -> None:
         """Process alarm payload from MQTT."""
         if "data" not in payload:
-            _LOGGER.warning("Alarm payload missing data field: %s", payload)
+            _LOGGER.warning("⚠️ MQTT: Alarm payload missing data field")
             return
         
         alarm_data = payload["data"]
@@ -59,6 +60,7 @@ class OlarmMessageHandler:
         self.device_state[device_id] = alarm_data
         
         # Process areas
+        areas_updated = False
         if "areas" in alarm_data and "areasDetail" in alarm_data:
             areas = []
             for i, area_state in enumerate(alarm_data["areas"]):
@@ -82,6 +84,12 @@ class OlarmMessageHandler:
                     area["last_changed"] = alarm_data["areasStamp"][i]
                 
                 areas.append(area)
+                
+                # Check if state changed
+                prev_areas = self.device_areas.get(device_id, [])
+                if i < len(prev_areas) and prev_areas[i].get("area_state") != area_state:
+                    _LOGGER.info("✅ MQTT: Area %s state changed to %s", area_name, area_state)
+                    areas_updated = True
             
             # Update device areas
             self.device_areas[device_id] = areas
@@ -90,8 +98,12 @@ class OlarmMessageHandler:
             for area in areas:
                 signal = f"{DOMAIN}_{device_id}_area_{area['area_number']}"
                 async_dispatcher_send(self.hass, signal, area)
+            
+            if areas_updated:
+                _LOGGER.info("✅ MQTT: Updated %d areas for device %s", len(areas), device_id)
         
         # Process zones
+        zones_updated = False
         if "zones" in alarm_data and "zonesStamp" in alarm_data:
             zones = []
             for i, zone_state in enumerate(alarm_data["zones"]):
@@ -103,6 +115,12 @@ class OlarmMessageHandler:
                     "last_changed": alarm_data["zonesStamp"][i] if i < len(alarm_data["zonesStamp"]) else None,
                 }
                 zones.append(zone)
+                
+                # Check if state changed
+                prev_zones = self.device_zones.get(device_id, [])
+                if i < len(prev_zones) and prev_zones[i].get("zone_state") != zone_state:
+                    _LOGGER.info("✅ MQTT: Zone %s state changed to %s", i+1, zone_state)
+                    zones_updated = True
             
             # Update device zones
             self.device_zones[device_id] = zones
@@ -111,6 +129,9 @@ class OlarmMessageHandler:
             for zone in zones:
                 signal = f"{DOMAIN}_{device_id}_zone_{zone['zone_number']}"
                 async_dispatcher_send(self.hass, signal, zone)
+            
+            if zones_updated:
+                _LOGGER.info("✅ MQTT: Updated %d zones for device %s", len(zones), device_id)
         
         # Also send a general update signal
         async_dispatcher_send(self.hass, f"{DOMAIN}_{device_id}_update", self.device_state[device_id])

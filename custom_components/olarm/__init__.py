@@ -94,9 +94,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
         # Set up MQTT clients for each device
         mqtt_clients = {}
+        _LOGGER.info("🔄 Setting up MQTT connections for %d device(s)...", len(devices))
+        
         for device in devices:
             device_id = device["id"]
             imei = device["imei"]
+            device_name = device.get("name", "Unknown Device")
+            
+            _LOGGER.info("🔄 Setting up MQTT for device: %s (ID: %s)", device_name, device_id)
             
             # Create MQTT client
             mqtt_client = OlarmMqttClient(
@@ -112,13 +117,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             # Connect to MQTT
             connected = await mqtt_client.connect()
             if connected:
-                _LOGGER.info("Connected to MQTT for device %s", device_id)
+                _LOGGER.info("✅ MQTT successfully connected for device: %s", device_name)
                 mqtt_clients[device_id] = mqtt_client
             else:
-                _LOGGER.error("Failed to connect to MQTT for device %s", device_id)
+                _LOGGER.error("❌ Failed to connect to MQTT for device: %s", device_name)
+                _LOGGER.warning("⚠️ Falling back to API polling for device: %s", device_name)
         
         entry_data["mqtt_clients"] = mqtt_clients
-        entry_data["mqtt_enabled"] = bool(mqtt_clients)
+        
+        if mqtt_clients:
+            mqtt_count = len(mqtt_clients)
+            total_count = len(devices)
+            _LOGGER.info(
+                "✅ MQTT setup complete: %d/%d devices connected (%s%%)",
+                mqtt_count, total_count, int(mqtt_count/total_count*100) if total_count > 0 else 0
+            )
+            entry_data["mqtt_enabled"] = True
+        else:
+            _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
+            entry_data["mqtt_enabled"] = False
     
     else:
         # This shouldn't happen
