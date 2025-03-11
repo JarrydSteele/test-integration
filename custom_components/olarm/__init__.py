@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import OlarmApiClient, OlarmApiError
 from .auth import OlarmAuth
@@ -148,34 +149,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 mqtt_count, total_count, int(mqtt_count/total_count*100) if total_count > 0 else 0
             )
             entry_data["mqtt_enabled"] = True
+            
+            # Set up a periodic task to check MQTT status
+            async def check_mqtt_periodically(now=None):
+                """Check MQTT status periodically and log results."""
+                _LOGGER.warning("🔄 Performing periodic MQTT connection check")
+                for device_id, client in mqtt_clients.items():
+                    status = client.get_status()
+                    connection_state = "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
+                    _LOGGER.warning(
+                        "MQTT Status for %s: %s, Messages: %d",
+                        status["device_name"], connection_state, status["messages_received"]
+                    )
+                    
+                    # If connected, request a status update
+                    if status["is_connected"]:
+                        _LOGGER.warning("Requesting MQTT update for %s", status["device_name"])
+                        client.publish_status_request()
+                    else:
+                        _LOGGER.warning("Attempting to reconnect %s", status["device_name"])
+                        hass.async_create_task(client.connect())
+            
+            # Register a periodic check every 5 minutes
+            entry_data["mqtt_checker"] = async_track_time_interval(
+                hass, 
+                check_mqtt_periodically, 
+                timedelta(minutes=5)
+            )
+    
+            # Also run once right now
+            hass.async_create_task(check_mqtt_periodically())
         else:
             if mqtt_only:
                 _LOGGER.error("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
             else:
                 _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
             entry_data["mqtt_enabled"] = False
-
-        if mqtt_clients:
-            # Set up a periodic task to check MQTT status
-            async def check_mqtt_periodically(now=None):
-                """Check MQTT status periodically and log results."""
-                mqtt_log("Performing periodic MQTT check")
-                for device_id, client in mqtt_clients.items():
-                    status = client.get_status()
-                    connected = "🟢 CONNECTED" if status["is_connected"] else "🔴 DISCONNECTED"
-                    mqtt_log(f"[{status['device_name']}]: {connected}, Messages: {status['messages_received']}")
-                    
-                    # If connected, request a status update
-                    if status["is_connected"]:
-                        client.publish_status_request()
-                        mqtt_log(f"[{status['device_name']}]: Requesting update via MQTT")
-            
-        # Register a periodic check every 5 minutes
-        mqtt_log("Setting up periodic MQTT checks every 5 minutes")
-        track_time_interval(hass, check_mqtt_periodically, timedelta(minutes=5))
-        
-        # Also run once at startup
-        hass.async_create_task(check_mqtt_periodically())
     
     else:
         # This shouldn't happen
