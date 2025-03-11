@@ -54,8 +54,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Set up data structures
     hass.data.setdefault(DOMAIN, {})
     entry_data = hass.data[DOMAIN].setdefault(entry.entry_id, {})
-    mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
-    debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, False)
+    mqtt_only = entry.data.get(CONF_MQTT_ONLY, True)
+    debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, True)
     
     with open("/config/olarm_setup.log", "a") as f:
         f.write(f"{timestamp} - MQTT Only: {mqtt_only}, Debug MQTT: {debug_mqtt}\n")
