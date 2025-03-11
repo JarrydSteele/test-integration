@@ -17,11 +17,11 @@ from .auth import OlarmAuth
 from .mqtt import OlarmMqttClient
 from .handler import OlarmMessageHandler
 from .const import (
-    DOMAIN,
     CONF_API_KEY,
     CONF_USER_EMAIL_PHONE,
     CONF_USER_PASS,
     DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
     PLATFORMS,
     SIGNAL_OLARM_MQTT_UPDATE,
 )
@@ -127,9 +127,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     
     # Load platform entities
     for platform in PLATFORMS:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, platform)
-        )
+        await hass.config_entries.async_forward_entry_setup(entry, platform)
     
     return True
 

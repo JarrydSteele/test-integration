@@ -5,16 +5,9 @@ from typing import Any, Dict, Optional, Callable
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
     AlarmControlPanelEntityFeature,
+    AlarmControlPanelState,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    STATE_ALARM_ARMED_AWAY,
-    STATE_ALARM_ARMED_HOME,
-    STATE_ALARM_ARMED_NIGHT,
-    STATE_ALARM_ARMING,
-    STATE_ALARM_DISARMED,
-    STATE_ALARM_TRIGGERED,
-)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -45,14 +38,14 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Map Olarm states to HA states
+# Map Olarm states to HA AlarmControlPanelState enum
 OLARM_TO_HA_STATE = {
-    STATE_DISARMED: STATE_ALARM_DISARMED,
-    STATE_ARMED_AWAY: STATE_ALARM_ARMED_AWAY,
-    STATE_ARMED_HOME: STATE_ALARM_ARMED_HOME,
-    STATE_ARMED_NIGHT: STATE_ALARM_ARMED_NIGHT,
-    STATE_TRIGGERED: STATE_ALARM_TRIGGERED,
-    STATE_PENDING: STATE_ALARM_ARMING,
+    STATE_DISARMED: AlarmControlPanelState.DISARMED,
+    STATE_ARMED_AWAY: AlarmControlPanelState.ARMED_AWAY,
+    STATE_ARMED_HOME: AlarmControlPanelState.ARMED_HOME,
+    STATE_ARMED_NIGHT: AlarmControlPanelState.ARMED_NIGHT,
+    STATE_TRIGGERED: AlarmControlPanelState.TRIGGERED,
+    STATE_PENDING: AlarmControlPanelState.ARMING,
 }
 
 async def async_setup_entry(
@@ -170,11 +163,20 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             )
 
     @property
-    def state(self) -> str:
-        """Return the state of the device."""
+    def alarm_state(self) -> AlarmControlPanelState:
+        """Return the state of the alarm control panel as an enum value."""
+        olarm_state = self._get_olarm_state()
+        if olarm_state is None:
+            return None
+        
+        # Map Olarm state to HA enum state
+        return OLARM_TO_HA_STATE.get(olarm_state)
+
+    def _get_olarm_state(self) -> Optional[str]:
+        """Get the current Olarm state string."""
         # If we have a current state from MQTT, use it
         if self._mqtt_enabled and self._current_state:
-            return OLARM_TO_HA_STATE.get(self._current_state, None)
+            return self._current_state
         
         # Otherwise, fall back to coordinator data
         if not self.coordinator.data or self._device_id not in self.coordinator.data:
@@ -190,8 +192,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             return None
             
         # Get the area state
-        area_state = device["deviceState"]["areas"][self._area_num - 1]
-        return OLARM_TO_HA_STATE.get(area_state, None)
+        return device["deviceState"]["areas"][self._area_num - 1]
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
