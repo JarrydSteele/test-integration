@@ -125,8 +125,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         area_name: str,
         mqtt_client: Optional[OlarmMqttClient] = None,
         message_handler = None,
-        mqtt_enabled: bool = False,
-        mqtt_only: bool = False,
+        mqtt_enabled: bool = True,
+        mqtt_only: bool = True,
     ):
         """Initialize the alarm panel."""
         super().__init__(coordinator)
