@@ -63,10 +63,10 @@ async def async_setup_entry(
     entities = []
     
     # Check if MQTT is enabled
-    mqtt_enabled = entry_data.get("mqtt_enabled", False)
+    mqtt_enabled = entry_data.get("mqtt_enabled", True)
     mqtt_clients = entry_data.get("mqtt_clients", {})
     message_handler = entry_data.get("message_handler")
-    mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
+    mqtt_only = entry.data.get(CONF_MQTT_ONLY, True)
     
     if mqtt_only:
         direct_log("⚠️ MQTT-ONLY MODE: API fallback is disabled for all devices")
