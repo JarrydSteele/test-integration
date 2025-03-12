@@ -66,7 +66,8 @@ async def async_setup_entry(
     mqtt_enabled = entry_data.get("mqtt_enabled", True)
     mqtt_clients = entry_data.get("mqtt_clients", {})
     message_handler = entry_data.get("message_handler")
-    mqtt_only = entry.data.get(CONF_MQTT_ONLY, True)
+    mqtt_only = entry_data.get("mqtt_only", True)
+    api_enabled = entry_data.get("api_enabled", False)
     
     if mqtt_only:
         direct_log("⚠️ MQTT-ONLY MODE: API fallback is disabled for all devices")
@@ -90,6 +91,11 @@ async def async_setup_entry(
                 # If MQTT is available, get the MQTT client for this device
                 mqtt_client = mqtt_clients.get(device_id) if mqtt_enabled else None
                 
+                # Skip devices without MQTT client in MQTT-only mode
+                if mqtt_only and not mqtt_client:
+                    direct_log(f"Skipping alarm panel for {device_name} - {area_name} (Area {area_num}) - no MQTT client in MQTT-only mode")
+                    continue
+                
                 # Log entity creation
                 direct_log(f"Creating alarm panel for {device_name} - {area_name} (Area {area_num})")
                 
@@ -105,6 +111,7 @@ async def async_setup_entry(
                         message_handler,
                         mqtt_enabled,
                         mqtt_only,
+                        api_enabled,
                     )
                 )
     
@@ -125,8 +132,9 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         area_name: str,
         mqtt_client: Optional[OlarmMqttClient] = None,
         message_handler = None,
-        mqtt_enabled: bool = True,
-        mqtt_only: bool = True,
+        mqtt_enabled: bool = False,
+        mqtt_only: bool = False,
+        api_enabled: bool = True,
     ):
         """Initialize the alarm panel."""
         super().__init__(coordinator)
@@ -139,6 +147,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         self._message_handler = message_handler
         self._mqtt_enabled = mqtt_enabled
         self._mqtt_only = mqtt_only
+        self._api_enabled = api_enabled
         self._current_state = None
         
         self._attr_unique_id = f"{device_id}_area_{area_num}"
@@ -155,7 +164,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             model="Olarm Communicator",
         )
         
-        direct_log(f"Initialized alarm panel: {self._attr_name} (MQTT: {mqtt_enabled})")
+        direct_log(f"Initialized alarm panel: {self._attr_name} (MQTT: {mqtt_enabled}, API: {api_enabled})")
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
@@ -205,6 +214,10 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
         if self._mqtt_enabled and self._current_state:
             return self._current_state
         
+        # Only fall back to coordinator data if API is enabled
+        if not self._api_enabled:
+            return STATE_DISARMED  # Default to disarmed if no MQTT state and API disabled
+            
         # Otherwise, fall back to coordinator data
         if not self.coordinator.data or self._device_id not in self.coordinator.data:
             return None
@@ -236,6 +249,10 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
                     attributes[ATTR_BATTERY] = power["Batt"] == "1"
                 return attributes
         
+        # Only fall back to coordinator data if API is enabled
+        if not self._api_enabled:
+            return {}
+            
         # Fall back to coordinator data
         if not self.coordinator.data or self._device_id not in self.coordinator.data:
             return {}
@@ -258,7 +275,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
 
     async def async_alarm_disarm(self, code: Optional[str] = None) -> None:
         """Send disarm command."""
-        # Try MQTT first if available
+        # Try MQTT if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
             direct_log(f"🔄 MQTT [{self._device_name}]: Using MQTT to disarm area {self._area_name}")
             _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to disarm area %s", 
@@ -269,8 +286,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             if success:
                 return
             
-            if self._mqtt_only:
-                error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT disarm command failed and API fallback is disabled"
+            if not self._api_enabled or self._mqtt_only:
+                error_msg = f"❌ [{self._device_name}]: MQTT disarm command failed and API is not available"
                 direct_log(error_msg)
                 _LOGGER.error(error_msg)
                 mqtt_log(error_msg, "error")
@@ -281,8 +298,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             mqtt_log(f"MQTT disarm failed for {self._device_name}, falling back to API", "warning")
         else:
             if self._mqtt_enabled:
-                if self._mqtt_only:
-                    error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT client not connected and API fallback is disabled"
+                if not self._api_enabled or self._mqtt_only:
+                    error_msg = f"❌ [{self._device_name}]: MQTT client not connected and API is not available"
                     direct_log(error_msg)
                     _LOGGER.error(error_msg)
                     mqtt_log(error_msg, "error")
@@ -295,7 +312,13 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
                 direct_log(f"Using API for disarm (MQTT not enabled) for {self._device_name}")
                 _LOGGER.debug("Using API for disarm (MQTT not enabled)")
         
-        # Fall back to API (if allowed)
+        # Fall back to API if allowed
+        if not self._api_enabled:
+            error_msg = f"❌ [{self._device_name}]: Cannot disarm - API calls are disabled and MQTT failed"
+            direct_log(error_msg)
+            _LOGGER.error(error_msg)
+            return
+            
         try:
             direct_log(f"🔄 API [{self._device_name}]: Using API to disarm area {self._area_name}")
             _LOGGER.warning("🔄 API [%s]: Using API to disarm area %s", 
@@ -313,7 +336,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
 
     async def async_alarm_arm_away(self, code: Optional[str] = None) -> None:
         """Send arm away command."""
-        # Try MQTT first if available
+        # Try MQTT if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
             direct_log(f"🔄 MQTT [{self._device_name}]: Using MQTT to arm away area {self._area_name}")
             _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm away area %s", 
@@ -324,8 +347,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             if success:
                 return
                 
-            if self._mqtt_only:
-                error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT arm away command failed and API fallback is disabled"
+            if not self._api_enabled or self._mqtt_only:
+                error_msg = f"❌ [{self._device_name}]: MQTT arm away command failed and API is not available"
                 direct_log(error_msg)
                 _LOGGER.error(error_msg)
                 mqtt_log(error_msg, "error")
@@ -336,8 +359,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             mqtt_log(f"MQTT arm away failed for {self._device_name}, falling back to API", "warning")
         else:
             if self._mqtt_enabled:
-                if self._mqtt_only:
-                    error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT client not connected and API fallback is disabled"
+                if not self._api_enabled or self._mqtt_only:
+                    error_msg = f"❌ [{self._device_name}]: MQTT client not connected and API is not available"
                     direct_log(error_msg)
                     _LOGGER.error(error_msg)
                     mqtt_log(error_msg, "error")
@@ -350,7 +373,13 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
                 direct_log(f"Using API for arm away (MQTT not enabled) for {self._device_name}")
                 _LOGGER.debug("Using API for arm away (MQTT not enabled)")
                 
-        # Fall back to API (if allowed)
+        # Fall back to API if allowed
+        if not self._api_enabled:
+            error_msg = f"❌ [{self._device_name}]: Cannot arm away - API calls are disabled and MQTT failed"
+            direct_log(error_msg)
+            _LOGGER.error(error_msg)
+            return
+            
         try:
             direct_log(f"🔄 API [{self._device_name}]: Using API to arm away area {self._area_name}")
             _LOGGER.warning("🔄 API [%s]: Using API to arm away area %s", 
@@ -368,7 +397,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
 
     async def async_alarm_arm_home(self, code: Optional[str] = None) -> None:
         """Send arm home command."""
-        # Try MQTT first if available
+        # Try MQTT if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
             direct_log(f"🔄 MQTT [{self._device_name}]: Using MQTT to arm home area {self._area_name}")
             _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm home area %s", 
@@ -379,8 +408,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             if success:
                 return
                 
-            if self._mqtt_only:
-                error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT arm home command failed and API fallback is disabled"
+            if not self._api_enabled or self._mqtt_only:
+                error_msg = f"❌ [{self._device_name}]: MQTT arm home command failed and API is not available"
                 direct_log(error_msg)
                 _LOGGER.error(error_msg)
                 mqtt_log(error_msg, "error")
@@ -391,8 +420,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             mqtt_log(f"MQTT arm home failed for {self._device_name}, falling back to API", "warning")
         else:
             if self._mqtt_enabled:
-                if self._mqtt_only:
-                    error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT client not connected and API fallback is disabled"
+                if not self._api_enabled or self._mqtt_only:
+                    error_msg = f"❌ [{self._device_name}]: MQTT client not connected and API is not available"
                     direct_log(error_msg)
                     _LOGGER.error(error_msg)
                     mqtt_log(error_msg, "error")
@@ -405,7 +434,13 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
                 direct_log(f"Using API for arm home (MQTT not enabled) for {self._device_name}")
                 _LOGGER.debug("Using API for arm home (MQTT not enabled)")
                 
-        # Fall back to API (if allowed)
+        # Fall back to API if allowed
+        if not self._api_enabled:
+            error_msg = f"❌ [{self._device_name}]: Cannot arm home - API calls are disabled and MQTT failed"
+            direct_log(error_msg)
+            _LOGGER.error(error_msg)
+            return
+            
         try:
             direct_log(f"🔄 API [{self._device_name}]: Using API to arm home area {self._area_name}")
             _LOGGER.warning("🔄 API [%s]: Using API to arm home area %s", 
@@ -423,7 +458,7 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
 
     async def async_alarm_arm_night(self, code: Optional[str] = None) -> None:
         """Send arm night command."""
-        # Try MQTT first if available
+        # Try MQTT if available
         if self._mqtt_enabled and self._mqtt_client and self._mqtt_client.is_connected:
             direct_log(f"🔄 MQTT [{self._device_name}]: Using MQTT to arm night area {self._area_name}")
             _LOGGER.warning("🔄 MQTT [%s]: Using MQTT to arm night area %s", 
@@ -434,8 +469,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             if success:
                 return
                 
-            if self._mqtt_only:
-                error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT arm night command failed and API fallback is disabled"
+            if not self._api_enabled or self._mqtt_only:
+                error_msg = f"❌ [{self._device_name}]: MQTT arm night command failed and API is not available"
                 direct_log(error_msg)
                 _LOGGER.error(error_msg)
                 mqtt_log(error_msg, "error")
@@ -446,8 +481,8 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
             mqtt_log(f"MQTT arm night failed for {self._device_name}, falling back to API", "warning")
         else:
             if self._mqtt_enabled:
-                if self._mqtt_only:
-                    error_msg = f"❌ MQTT-ONLY MODE [{self._device_name}]: MQTT client not connected and API fallback is disabled"
+                if not self._api_enabled or self._mqtt_only:
+                    error_msg = f"❌ [{self._device_name}]: MQTT client not connected and API is not available"
                     direct_log(error_msg)
                     _LOGGER.error(error_msg)
                     mqtt_log(error_msg, "error")
@@ -460,7 +495,13 @@ class OlarmAlarmPanel(CoordinatorEntity, AlarmControlPanelEntity):
                 direct_log(f"Using API for arm night (MQTT not enabled) for {self._device_name}")
                 _LOGGER.debug("Using API for arm night (MQTT not enabled)")
                 
-        # Fall back to API (if allowed)
+        # Fall back to API if allowed
+        if not self._api_enabled:
+            error_msg = f"❌ [{self._device_name}]: Cannot arm night - API calls are disabled and MQTT failed"
+            direct_log(error_msg)
+            _LOGGER.error(error_msg)
+            return
+            
         try:
             direct_log(f"🔄 API [{self._device_name}]: Using API to arm night area {self._area_name}")
             _LOGGER.warning("🔄 API [%s]: Using API to arm night area %s", 
