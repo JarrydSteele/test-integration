@@ -298,7 +298,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 mqtt_log("⚠️ No MQTT connections established, using API polling only")
             entry_data["mqtt_enabled"] = False
     
-    else:
+    if CONF_USER_EMAIL_PHONE not in entry.data and CONF_USER_PASS in entry.data and CONF_API_KEY not in entry.data:
         # This shouldn't happen
         _LOGGER.error("Neither API key nor email/password provided")
         return False
