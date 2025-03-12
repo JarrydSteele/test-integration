@@ -97,7 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         # We don't have MQTT with API key method
         entry_data["mqtt_enabled"] = False
         
-    elif CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
+    if CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
         # New email/password auth with MQTT support
         direct_log("Setting up with email/password authentication")
         _LOGGER.info("Setting up with email/password authentication")
