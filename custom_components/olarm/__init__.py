@@ -13,7 +13,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
 from .api import OlarmApiClient, OlarmApiError
@@ -74,39 +74,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     mqtt_only = entry.data.get(CONF_MQTT_ONLY, False)
     debug_mqtt = entry.data.get(CONF_DEBUG_MQTT, False)
     
-    # Initialize either with API key or email/password auth
+    # Initialize either with email/password or API key auth
     if CONF_API_KEY in entry.data:
-        # Legacy API key method
-        direct_log("Setting up with API key authentication")
-        _LOGGER.info("Setting up with API key authentication")
-        client = OlarmApiClient(entry.data[CONF_API_KEY], session)
-        entry_data["client"] = client
+        # Email/password auth - use MQTT for everything
+        direct_log("Setting up with email/password authentication (MQTT-only mode)")
+        _LOGGER.info("Setting up with email/password authentication (MQTT-only mode)")
+        mqtt_log("Setting up Olarm integration with email/password auth (MQTT-only mode)")
         
-        # Set up coordinator
-        coordinator = OlarmDataUpdateCoordinator(hass, client)
+        # Force MQTT-only mode since we're not using API key
+        mqtt_only = True
+        direct_log("⚠️ MQTT-ONLY MODE ENABLED: No API calls will be made")
+        _LOGGER.warning("⚠️ MQTT-ONLY MODE ENABLED: No API calls will be made")
+        mqtt_log("⚠️ MQTT-ONLY MODE ENABLED: No API calls will be made")
         
-        try:
-            await coordinator.async_config_entry_first_refresh()
-        except Exception as ex:
-            log_exception(ex, "Coordinator refresh")
-            _LOGGER.error("Error in coordinator refresh: %s", ex)
-            raise
-            
-        entry_data["coordinator"] = coordinator
-        
-        # We don't have MQTT with API key method
-        entry_data["mqtt_enabled"] = False
-        
-    if CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
-        # New email/password auth with MQTT support
-        direct_log("Setting up with email/password authentication")
-        _LOGGER.info("Setting up with email/password authentication")
-        mqtt_log("Setting up Olarm integration with email/password auth")
-        
-        if mqtt_only:
-            direct_log("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
-            _LOGGER.warning("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
-            mqtt_log("⚠️ MQTT-ONLY MODE ENABLED: API fallback will be disabled")
+        # Mark API as disabled
+        entry_data["api_enabled"] = False
         
         # Initialize auth
         auth = OlarmAuth(
@@ -142,32 +124,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             direct_log("No devices found for user")
             _LOGGER.warning("No devices found for user")
             mqtt_log("No devices found for user - MQTT setup will be skipped")
+            return False
         else:
             direct_log(f"Found {len(devices)} devices")
             _LOGGER.info("Found %d devices", len(devices))
+        
+        # Create a dummy coordinator for compatibility with platform setup
+        # This will not make any API calls but will provide the device structure
+        # needed by the platform entities
+        dummy_devices = {}
+        for device in devices:
+            device_id = device["id"]
+            device_name = device.get("name", "Unknown Device")
+            # Create a minimal device structure with required fields
+            dummy_devices[device_id] = {
+                "deviceId": device_id,
+                "deviceName": device_name,
+                "deviceProfile": {
+                    "areasLimit": 1,
+                    "areasLabels": ["Main Area"],
+                    "zonesLimit": 0,
+                    "zonesLabels": [],
+                    "pgmLimit": 0,
+                    "pgmLabels": []
+                },
+                "deviceState": {
+                    "areas": ["disarm"],
+                    "zones": []
+                }
+            }
+        
+        # Create a dummy client for compatibility with platform setup
+        dummy_client = OlarmApiClient("dummy_token", session)
+        entry_data["client"] = dummy_client
+        
+        # Create a dummy coordinator that doesn't make API calls
+        class DummyCoordinator(DataUpdateCoordinator):
+            """Dummy coordinator that doesn't make API calls."""
             
-        # Create API client from access token
-        tokens = auth.get_tokens()
-        if tokens["access_token"]:
-            direct_log("Creating API client with token")
-            _LOGGER.debug("Creating API client with token")
-                
-            client = OlarmApiClient(tokens["access_token"], session)
-            entry_data["client"] = client
+            def __init__(self, hass, devices):
+                """Initialize the dummy coordinator."""
+                super().__init__(
+                    hass,
+                    _LOGGER,
+                    name=DOMAIN,
+                    update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+                )
+                self.devices = devices
+                self.data = devices
             
-            # Set up coordinator
-            coordinator = OlarmDataUpdateCoordinator(hass, client, auth)
-            try:
-                await coordinator.async_config_entry_first_refresh()
-                direct_log("Coordinator refresh succeeded")
-                _LOGGER.debug("Coordinator refresh succeeded")
-            except Exception as ex:
-                log_exception(ex, "Coordinator refresh")
-                direct_log(f"Coordinator refresh error: {ex}")
-                _LOGGER.error("Coordinator refresh error: %s", ex)
-                raise
-                
-            entry_data["coordinator"] = coordinator
+            async def _async_update_data(self):
+                """Return the current data without making API calls."""
+                direct_log("Dummy coordinator update - no API calls made")
+                return self.devices
+        
+        coordinator = DummyCoordinator(hass, dummy_devices)
+        entry_data["coordinator"] = coordinator
         
         # Set up message handler
         message_handler = OlarmMessageHandler(hass, entry.entry_id)
@@ -178,6 +190,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         direct_log(f"🔄 Setting up MQTT for {len(devices)} devices")
         _LOGGER.warning("🔄 Setting up MQTT for %d devices", len(devices))
         mqtt_log(f"Setting up MQTT for {len(devices)} devices")
+        
+        # Get the access token for MQTT connections
+        tokens = auth.get_tokens()
+        if not tokens["access_token"]:
+            direct_log("No access token available, cannot set up MQTT")
+            _LOGGER.error("No access token available, cannot set up MQTT")
+            return False
         
         for device in devices:
             device_id = device["id"]
@@ -214,14 +233,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     _LOGGER.error("❌ MQTT connection failed for device: %s", device_name)
                     mqtt_log(f"❌ MQTT connection failed for device: {device_name}")
                     
-                    if mqtt_only:
-                        direct_log(f"⚠️ MQTT-ONLY MODE: Device {device_name} will be unavailable")
-                        _LOGGER.error("⚠️ MQTT-ONLY MODE: Device %s will be unavailable", device_name)
-                        mqtt_log(f"⚠️ MQTT-ONLY MODE: Device {device_name} will be unavailable")
-                    else:
-                        direct_log(f"⚠️ Falling back to API polling for device: {device_name}")
-                        _LOGGER.warning("⚠️ Falling back to API polling for device: %s", device_name)
-                        mqtt_log(f"⚠️ Falling back to API polling for device: {device_name}")
+                    direct_log(f"⚠️ MQTT-ONLY MODE: Device {device_name} will be unavailable")
+                    _LOGGER.error("⚠️ MQTT-ONLY MODE: Device %s will be unavailable", device_name)
+                    mqtt_log(f"⚠️ MQTT-ONLY MODE: Device {device_name} will be unavailable")
             except Exception as mqtt_ex:
                 log_exception(mqtt_ex, f"MQTT connection for {device_name}")
                 direct_log(f"MQTT connection error for {device_name}: {mqtt_ex}")
@@ -288,17 +302,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             # Also run once right now
             hass.async_create_task(check_mqtt_periodically())
         else:
-            if mqtt_only:
-                direct_log("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
-                _LOGGER.error("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
-                mqtt_log("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration may not function!")
-            else:
-                direct_log("⚠️ No MQTT connections established, using API polling only")
-                _LOGGER.warning("⚠️ No MQTT connections established, using API polling only")
-                mqtt_log("⚠️ No MQTT connections established, using API polling only")
+            direct_log("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration will not function!")
+            _LOGGER.error("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration will not function!")
+            mqtt_log("⚠️ MQTT-ONLY MODE: No MQTT connections were established, integration will not function!")
             entry_data["mqtt_enabled"] = False
+            return False
     
-    if CONF_USER_EMAIL_PHONE not in entry.data and CONF_USER_PASS in entry.data and CONF_API_KEY not in entry.data:
+    elif CONF_USER_EMAIL_PHONE in entry.data and CONF_USER_PASS in entry.data:
+        # API key method - use API for everything
+        direct_log("Setting up with API key authentication")
+        _LOGGER.info("Setting up with API key authentication")
+        
+        client = OlarmApiClient(entry.data[CONF_API_KEY], session)
+        entry_data["client"] = client
+        
+        # Set up coordinator
+        coordinator = OlarmDataUpdateCoordinator(hass, client)
+        
+        try:
+            await coordinator.async_config_entry_first_refresh()
+        except Exception as ex:
+            log_exception(ex, "Coordinator refresh")
+            _LOGGER.error("Error in coordinator refresh: %s", ex)
+            raise
+            
+        entry_data["coordinator"] = coordinator
+        
+        # We don't have MQTT with API key method
+        entry_data["mqtt_enabled"] = False
+        # API is enabled since we're using the API key
+        entry_data["api_enabled"] = True
+        
+    else:
         # This shouldn't happen
         _LOGGER.error("Neither API key nor email/password provided")
         return False
@@ -373,6 +408,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     )
     direct_log(f"Registered service: {DOMAIN}.{SERVICE_CHECK_MQTT_STATUS}")
     mqtt_log(f"Registered service: {DOMAIN}.{SERVICE_CHECK_MQTT_STATUS}")
+    
+    # Store MQTT-only setting in entry_data for platforms to access
+    entry_data["mqtt_only"] = mqtt_only
     
     # Load platform entities
     for platform in PLATFORMS:
